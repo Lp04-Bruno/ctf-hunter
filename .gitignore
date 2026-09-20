@@ -1,0 +1,31 @@
+# Rust
+target/
+
+# Node and frontend builds
+node_modules/
+dist/
+.svelte-kit/
+
+# Local runtime data
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+
+# Workspace-local agent state
+/.agents/
+/.codex/
+/.git-data/
+
+# Local project planning and setup material
+/setup/
