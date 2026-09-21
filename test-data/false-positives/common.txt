@@ -1,0 +1,9 @@
+administrator
+configuration
+123456
+abcdef
+deadbeef
+This is a normal English sentence about application configuration.
+550e8400-e29b-41d4-a716-446655440000
+4f8c2a91d03b7e65a184c920b7e346d1
+eyJub3QiOiJqd3QifQ.not-valid.not-valid

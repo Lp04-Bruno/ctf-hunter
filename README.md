@@ -2,7 +2,7 @@
 
 CTF Hunter is a Linux-first application for passively finding CTF flags in terminal output, watched files, and manually submitted data.
 
-The project is in active development. The current implementation provides the foundational Rust domain types; collection, analysis, persistence, and UI components will be added incrementally.
+The project is in active development. The current implementation provides the foundational domain types and a bounded analysis engine with ANSI cleanup, recursive JSON traversal, candidate deduplication, common text decoders, flag matching, and transformation provenance. Collection, persistence, and UI components will be added incrementally.
 
 ## Requirements
 
