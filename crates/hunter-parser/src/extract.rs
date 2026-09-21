@@ -103,6 +103,11 @@ fn extract_plain_text(
     limits: ExtractionLimits,
 ) -> Result<Vec<ExtractedValue>, ExtractionError> {
     let mut output = Vec::new();
+    for line in input.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if is_decimal_ascii_sequence(line) {
+            push_value(&mut output, base_path.clone(), line.as_bytes(), limits)?;
+        }
+    }
     for token in input.split(|character: char| character.is_whitespace() || character.is_control())
     {
         let token = token.trim_matches(|character: char| {
@@ -113,6 +118,17 @@ fn extract_plain_text(
         }
     }
     Ok(output)
+}
+
+fn is_decimal_ascii_sequence(value: &str) -> bool {
+    let parts: Vec<_> = value
+        .split(|character: char| character.is_whitespace() || character == ',')
+        .filter(|part| !part.is_empty())
+        .collect();
+    parts.len() >= 4
+        && parts.iter().all(|part| {
+            part.bytes().all(|byte| byte.is_ascii_digit()) && part.parse::<u8>().is_ok()
+        })
 }
 
 fn push_value(
@@ -182,5 +198,14 @@ mod tests {
             .expect("oversized token should be skipped");
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].data(), b"ok!");
+    }
+
+    #[test]
+    fn preserves_decimal_ascii_sequences_as_one_candidate() {
+        let input = "70 76 65 71 123 116 101 115 116 125";
+        let values = extract_candidates(input, &CandidatePath::root(), ExtractionLimits::default())
+            .expect("valid text");
+
+        assert!(values.iter().any(|value| value.data() == input.as_bytes()));
     }
 }

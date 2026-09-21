@@ -1,8 +1,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use hunter_decoder::DecoderSet;
+use hunter_decoder::{DecodeError, DecoderSet};
 use hunter_flags::{FlagDetector, FlagPattern, PatternError};
 use hunter_parser::{ExtractionError, ExtractionLimits, extract_candidates, strip_ansi};
+use hunter_scoring::{FindingScore, FindingScorer, ScoreContext, ScoreSignals};
 use hunter_types::{
     Candidate, CandidateData, CandidateId, CandidatePath, CaptureEvent, FindingId,
     FindingProvenance, FlagFinding, Transformation, TransformationId, TransformationName,
@@ -109,6 +110,33 @@ pub struct AnalysisStatistics {
     pub duplicate_occurrences: usize,
     pub decoded_candidates: usize,
     pub suppressed_revisits: usize,
+    pub decoder_detections: usize,
+    pub decoder_attempts: usize,
+    pub decoder_errors: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FindingAssessment {
+    finding_id: FindingId,
+    score: FindingScore,
+    signals: ScoreSignals,
+}
+
+impl FindingAssessment {
+    #[must_use]
+    pub const fn finding_id(self) -> FindingId {
+        self.finding_id
+    }
+
+    #[must_use]
+    pub const fn score(self) -> FindingScore {
+        self.score
+    }
+
+    #[must_use]
+    pub const fn signals(self) -> ScoreSignals {
+        self.signals
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -118,6 +146,7 @@ pub struct AnalysisReport {
     occurrences: Vec<CandidateOccurrence>,
     transformations: Vec<Transformation>,
     findings: Vec<FlagFinding>,
+    assessments: Vec<FindingAssessment>,
     budget_limits: BTreeSet<BudgetLimit>,
     statistics: AnalysisStatistics,
 }
@@ -149,6 +178,11 @@ impl AnalysisReport {
     }
 
     #[must_use]
+    pub fn assessments(&self) -> &[FindingAssessment] {
+        &self.assessments
+    }
+
+    #[must_use]
     pub const fn budget_limits(&self) -> &BTreeSet<BudgetLimit> {
         &self.budget_limits
     }
@@ -176,6 +210,7 @@ pub struct Analyzer {
     config: AnalysisConfig,
     decoder: DecoderSet,
     detector: FlagDetector,
+    scorer: FindingScorer,
 }
 
 impl Analyzer {
@@ -187,6 +222,7 @@ impl Analyzer {
             config: config.validate()?,
             decoder: DecoderSet::new(),
             detector: FlagDetector::new(patterns)?,
+            scorer: FindingScorer::new(),
         })
     }
 
@@ -198,6 +234,12 @@ impl Analyzer {
             max_value_bytes: self.config.max_extracted_value_bytes,
         };
         let mut extracted = extract_candidates(&text, &CandidatePath::root(), limits)?;
+        if std::str::from_utf8(&normalized).is_err() || normalized.contains(&0) {
+            extracted.insert(
+                0,
+                hunter_parser::ExtractedValue::new(CandidatePath::root(), normalized.clone()),
+            );
+        }
         let root_limit_reached = extracted.len() > self.config.max_root_candidates;
         extracted.truncate(self.config.max_root_candidates);
 
@@ -282,19 +324,37 @@ impl Analyzer {
                 .max_children_per_candidate
                 .saturating_sub(children.len());
 
+            let detections = self.decoder.detect(&item.data);
+            report.statistics.decoder_detections += detections.len();
             if item.depth == self.config.max_depth {
-                if !self.decoder.decode(&item.data).is_empty() {
+                if !detections.is_empty() {
                     report.budget_limits.insert(BudgetLimit::Depth);
                 }
             } else {
-                let decoded = self.decoder.decode(&item.data);
+                let remaining_bytes = self
+                    .config
+                    .max_decoded_bytes_per_root
+                    .saturating_sub(decoded_bytes);
+                let mut decoded = Vec::new();
+                for detection in detections {
+                    report.statistics.decoder_attempts += 1;
+                    match self.decoder.decode(detection, &item.data, remaining_bytes) {
+                        Ok(values) => decoded.extend(values),
+                        Err(DecodeError::OutputLimit { .. }) => {
+                            report.budget_limits.insert(BudgetLimit::DecodedBytes);
+                        }
+                        Err(DecodeError::InvalidData) => {
+                            report.statistics.decoder_errors += 1;
+                        }
+                    }
+                }
                 if decoded.len() > remaining {
                     report.budget_limits.insert(BudgetLimit::Children);
                 }
                 children.extend(decoded.into_iter().take(remaining).map(|value| ChildValue {
                     path: item.path.clone(),
                     data: value.data().to_vec(),
-                    transformation: Some(value.transformation()),
+                    transformation: Some(value.transformation().to_owned()),
                 }));
             }
 
@@ -411,8 +471,16 @@ impl Analyzer {
             return;
         };
         for matched in self.detector.detect(text) {
+            let assessment = self.scorer.score(ScoreContext {
+                match_kind: matched.kind(),
+                matched_value: matched.value().as_str(),
+                candidate_data: &item.data,
+                path: &item.path,
+                transformation_count: item.transformations.len(),
+            });
+            let finding_id = FindingId::generate();
             let mut finding = FlagFinding::new(
-                FindingId::generate(),
+                finding_id,
                 FindingProvenance::new(
                     event.session_id(),
                     event.id(),
@@ -421,13 +489,18 @@ impl Analyzer {
                     item.transformations.clone(),
                 ),
                 matched.value().clone(),
-                matched.confidence(),
+                assessment.score().confidence(),
                 event.captured_at(),
             );
             for _ in 1..item.occurrences {
                 let _ = finding.record_occurrence();
             }
             report.findings.push(finding);
+            report.assessments.push(FindingAssessment {
+                finding_id,
+                score: assessment.score(),
+                signals: assessment.signals(),
+            });
         }
     }
 }
@@ -453,7 +526,7 @@ struct WorkItem {
 struct ChildValue {
     path: CandidatePath,
     data: Vec<u8>,
-    transformation: Option<&'static str>,
+    transformation: Option<String>,
 }
 
 fn deduplicate_roots(values: Vec<hunter_parser::ExtractedValue>) -> Vec<RootValue> {

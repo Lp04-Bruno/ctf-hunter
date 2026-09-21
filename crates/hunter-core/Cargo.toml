@@ -10,12 +10,19 @@ blake3.workspace = true
 hunter-decoder = { path = "../hunter-decoder" }
 hunter-flags = { path = "../hunter-flags" }
 hunter-parser = { path = "../hunter-parser" }
+hunter-scoring = { path = "../hunter-scoring" }
 hunter-types = { path = "../hunter-types" }
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
+flate2.workspace = true
 serde_json.workspace = true
+
+[[bench]]
+name = "analysis"
+harness = false
 
 [lints]
 workspace = true
