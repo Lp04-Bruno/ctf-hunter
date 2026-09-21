@@ -1,0 +1,21 @@
+[package]
+name = "hunter-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+blake3.workspace = true
+hunter-decoder = { path = "../hunter-decoder" }
+hunter-flags = { path = "../hunter-flags" }
+hunter-parser = { path = "../hunter-parser" }
+hunter-types = { path = "../hunter-types" }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
