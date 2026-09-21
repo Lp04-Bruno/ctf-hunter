@@ -1,0 +1,23 @@
+[package]
+name = "ctf-hunterd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+hunter-core = { path = "../../crates/hunter-core" }
+hunter-database = { path = "../../crates/hunter-database" }
+hunter-flags = { path = "../../crates/hunter-flags" }
+hunter-ipc = { path = "../../crates/hunter-ipc" }
+hunter-types = { path = "../../crates/hunter-types" }
+nix.workspace = true
+signal-hook.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

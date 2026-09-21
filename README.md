@@ -2,7 +2,7 @@
 
 CTF Hunter is a Linux-first application for passively finding CTF flags in terminal output, watched files, and manually submitted data.
 
-The project is in active development. The current implementation provides foundational domain types and a bounded analysis engine with structured parsing, classified recursive decoding, compressed payload support, numerical finding scoring, candidate deduplication, and transformation provenance. The terminal-capture feasibility prototype is intentionally not approved for integration because syscall observation cannot reliably distinguish program output from text redrawn by unknown interactive applications. Collection, persistence, and UI components will be added incrementally.
+The project is in active development. The current implementation provides a bounded analysis engine, SQLite persistence, and an unprivileged per-user daemon with versioned Unix-socket IPC. The terminal-capture feasibility prototype is intentionally not approved for integration because syscall observation cannot reliably distinguish program output from text redrawn by unknown interactive applications. File collection and UI components will be added incrementally.
 
 ## Requirements
 
@@ -21,3 +21,12 @@ cargo build --package ctf-hunter-capture
 ```
 
 Development follows Git Flow: feature branches merge into `develop`, while `master` remains releasable.
+
+## Daemon
+
+```bash
+cargo run --package ctf-hunterd --bin ctf-hunterd
+cargo run --package ctf-hunterd --bin ctf-hunterctl -- --socket "$XDG_RUNTIME_DIR/ctf-hunter/daemon.sock" status
+```
+
+The daemon stores its database below the user data directory and creates a mode `0600` socket below the user runtime directory.
