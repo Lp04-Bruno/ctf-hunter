@@ -1,0 +1,29 @@
+[package]
+name = "ctf-hunter-capture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+anyhow.workspace = true
+aya.workspace = true
+ctf-hunter-common = { path = "../ctf-hunter-common" }
+
+[build-dependencies]
+anyhow.workspace = true
+aya-build.workspace = true
+cargo_metadata = "0.23"
+ctf-hunter-ebpf = { path = "../ctf-hunter-ebpf" }
+
+[[bin]]
+name = "ctf-hunter-capture"
+path = "src/main.rs"
+
+[[bin]]
+name = "capture-stress"
+path = "src/bin/capture_stress.rs"
+
+[lints]
+workspace = true
