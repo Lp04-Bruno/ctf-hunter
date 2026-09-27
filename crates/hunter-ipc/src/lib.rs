@@ -55,6 +55,17 @@ pub enum Request {
     StopSession {
         session_id: SessionId,
     },
+    AddWatchDirectory {
+        session_id: SessionId,
+        directory: String,
+    },
+    RemoveWatchDirectory {
+        session_id: SessionId,
+        directory: String,
+    },
+    ListWatchDirectories {
+        session_id: SessionId,
+    },
     SubmitText {
         session_id: SessionId,
         text: String,
@@ -104,6 +115,10 @@ impl ResponseEnvelope {
 pub enum Response {
     Status(DaemonStatus),
     Session(Session),
+    WatchDirectories {
+        session_id: SessionId,
+        directories: Vec<String>,
+    },
     Submission {
         event_id: EventId,
         finding_ids: Vec<FindingId>,
@@ -144,6 +159,22 @@ pub struct DaemonStatus {
     pub rejected_connections: u64,
     pub completed_requests: u64,
     pub failed_requests: u64,
+    pub file_collector: FileCollectorStatus,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FileCollectorStatus {
+    pub events_received: u64,
+    pub files_read: u64,
+    pub duplicate_events: u64,
+    pub oversized_files: u64,
+    pub rate_limited_files: u64,
+    pub dropped_events: u64,
+    pub read_errors: u64,
+    pub queue_overflows: u64,
+    pub invalidated_watches: u64,
+    pub analyzed_files: u64,
+    pub analysis_errors: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

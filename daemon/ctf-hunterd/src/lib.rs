@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs, io,
     os::unix::{
         fs::FileTypeExt as _, fs::MetadataExt as _, fs::PermissionsExt as _, net::UnixListener,
@@ -13,17 +14,21 @@ use std::{
     time::Duration,
 };
 
+use hunter_collectors::{
+    CollectedFile, CollectorControlError, FileCollector, FileCollectorConfig, FileCollectorMetrics,
+    FileCollectorStatistics, WatchRegistration,
+};
 use hunter_core::{AnalysisConfig, Analyzer};
 use hunter_database::Database;
 use hunter_flags::FlagPattern;
 use hunter_ipc::{
-    DaemonStatus, ErrorCode, FindingDetail, FindingOccurrence, FindingSummary, FrameError,
-    IO_TIMEOUT, MAX_LIST_LIMIT, PROTOCOL_VERSION, Request, RequestEnvelope, Response,
+    DaemonStatus, ErrorCode, FileCollectorStatus, FindingDetail, FindingOccurrence, FindingSummary,
+    FrameError, IO_TIMEOUT, MAX_LIST_LIMIT, PROTOCOL_VERSION, Request, RequestEnvelope, Response,
     ResponseEnvelope, TransformationStep, read_frame, write_frame,
 };
 use hunter_types::{
-    CaptureEvent, EventId, EventPayload, Session, SessionId, SessionStatus, SourceMetadata,
-    Timestamp,
+    CaptureEvent, EventId, EventPayload, FileSource, Session, SessionId, SessionStatus,
+    SourceMetadata, SourcePath, Timestamp,
 };
 use nix::{
     sys::socket::{getsockopt, sockopt::PeerCredentials},
@@ -42,6 +47,7 @@ pub struct DaemonConfig {
     pub socket_path: PathBuf,
     pub queue_capacity: usize,
     pub worker_count: usize,
+    pub file_collector: FileCollectorConfig,
 }
 
 impl DaemonConfig {
@@ -52,6 +58,7 @@ impl DaemonConfig {
             socket_path: socket_path.into(),
             queue_capacity: DEFAULT_QUEUE_CAPACITY,
             worker_count: DEFAULT_WORKER_COUNT,
+            file_collector: FileCollectorConfig::default(),
         }
     }
 }
@@ -62,6 +69,8 @@ pub enum DaemonError {
     Io(#[from] io::Error),
     #[error(transparent)]
     Database(#[from] hunter_database::DatabaseError),
+    #[error(transparent)]
+    FileCollector(#[from] hunter_collectors::FileCollectorError),
     #[error("queue capacity must be greater than zero")]
     InvalidQueueCapacity,
     #[error("worker count must be greater than zero")]
@@ -85,6 +94,8 @@ struct Statistics {
     rejected_connections: AtomicU64,
     completed_requests: AtomicU64,
     failed_requests: AtomicU64,
+    analyzed_files: AtomicU64,
+    file_analysis_errors: AtomicU64,
 }
 
 impl Statistics {
@@ -93,6 +104,7 @@ impl Statistics {
         schema_version: usize,
         worker_count: usize,
         queue_capacity: usize,
+        collector: FileCollectorStatistics,
     ) -> DaemonStatus {
         DaemonStatus {
             schema_version,
@@ -103,6 +115,19 @@ impl Statistics {
             rejected_connections: self.rejected_connections.load(Ordering::Relaxed),
             completed_requests: self.completed_requests.load(Ordering::Relaxed),
             failed_requests: self.failed_requests.load(Ordering::Relaxed),
+            file_collector: FileCollectorStatus {
+                events_received: collector.events_received,
+                files_read: collector.files_read,
+                duplicate_events: collector.duplicate_events,
+                oversized_files: collector.oversized_files,
+                rate_limited_files: collector.rate_limited_files,
+                dropped_events: collector.dropped_events,
+                read_errors: collector.read_errors,
+                queue_overflows: collector.queue_overflows,
+                invalidated_watches: collector.invalidated_watches,
+                analyzed_files: self.analyzed_files.load(Ordering::Relaxed),
+                analysis_errors: self.file_analysis_errors.load(Ordering::Relaxed),
+            },
         }
     }
 }
@@ -127,6 +152,7 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
     secure_private_directory(database_directory)?;
     let database = Database::open(&config.database_path)?;
     let schema_version = database.schema_version()?;
+    let stored_watches = database.all_watch_directories()?;
     fs::set_permissions(&config.database_path, fs::Permissions::from_mode(0o600))?;
     drop(database);
     let listener = bind_secure_socket(&config.socket_path)?;
@@ -135,6 +161,29 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
 
     let statistics = Arc::new(Statistics::default());
     let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
+    let collector_sender = sender.clone();
+    let collector_statistics = Arc::clone(&statistics);
+    let registrations = stored_watches
+        .iter()
+        .filter(|watch| is_restorable_watch_directory(&watch.directory))
+        .map(|watch| WatchRegistration {
+            session_id: watch.session_id,
+            directory: watch.directory.clone(),
+        })
+        .collect::<Vec<_>>();
+    let active_sessions = stored_watches
+        .iter()
+        .filter(|watch| watch.active)
+        .map(|watch| watch.session_id)
+        .collect::<HashSet<_>>();
+    let collector = FileCollector::start(
+        config.file_collector.clone(),
+        registrations,
+        active_sessions,
+        move |file| enqueue_file(&collector_sender, file, &collector_statistics),
+    )?;
+    let collector_control = collector.control();
+    let collector_metrics = collector.metrics();
     let receiver = Arc::new(Mutex::new(receiver));
     let session_state_lock = Arc::new(Mutex::new(()));
     let queue_capacity = config.queue_capacity;
@@ -147,6 +196,8 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
             statistics: Arc::clone(&statistics),
             terminating: Arc::clone(&terminating),
             session_state_lock: Arc::clone(&session_state_lock),
+            collector_control: collector_control.clone(),
+            collector_metrics: collector_metrics.clone(),
             schema_version,
             worker_count,
             queue_capacity,
@@ -182,7 +233,7 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
                     );
                     continue;
                 }
-                enqueue(&sender, stream, &statistics)?;
+                enqueue_client(&sender, stream, &statistics)?;
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(ACCEPT_POLL_INTERVAL);
@@ -190,6 +241,7 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
             Err(error) => return Err(error.into()),
         }
     }
+    collector.shutdown()?;
     drop(sender);
     for worker in workers {
         worker.join().map_err(|_| DaemonError::WorkerPanicked)??;
@@ -197,15 +249,20 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
     Ok(())
 }
 
-fn enqueue(
-    sender: &SyncSender<std::os::unix::net::UnixStream>,
+enum Work {
+    Client(std::os::unix::net::UnixStream),
+    File(CollectedFile),
+}
+
+fn enqueue_client(
+    sender: &SyncSender<Work>,
     stream: std::os::unix::net::UnixStream,
     statistics: &Statistics,
 ) -> Result<(), DaemonError> {
     statistics.queue_depth.fetch_add(1, Ordering::Relaxed);
-    match sender.try_send(stream) {
+    match sender.try_send(Work::Client(stream)) {
         Ok(()) => Ok(()),
-        Err(TrySendError::Full(mut stream)) => {
+        Err(TrySendError::Full(Work::Client(mut stream))) => {
             statistics.queue_depth.fetch_sub(1, Ordering::Relaxed);
             statistics
                 .rejected_connections
@@ -221,6 +278,7 @@ fn enqueue(
             }
             Ok(())
         }
+        Err(TrySendError::Full(Work::File(_))) => unreachable!("client work changed variant"),
         Err(TrySendError::Disconnected(_)) => {
             statistics.queue_depth.fetch_sub(1, Ordering::Relaxed);
             Err(DaemonError::WorkerStopped)
@@ -228,11 +286,24 @@ fn enqueue(
     }
 }
 
+fn enqueue_file(sender: &SyncSender<Work>, file: CollectedFile, statistics: &Statistics) -> bool {
+    statistics.queue_depth.fetch_add(1, Ordering::Relaxed);
+    match sender.try_send(Work::File(file)) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
+            statistics.queue_depth.fetch_sub(1, Ordering::Relaxed);
+            false
+        }
+    }
+}
+
 struct WorkerContext {
-    receiver: Arc<Mutex<Receiver<std::os::unix::net::UnixStream>>>,
+    receiver: Arc<Mutex<Receiver<Work>>>,
     statistics: Arc<Statistics>,
     terminating: Arc<AtomicBool>,
     session_state_lock: Arc<Mutex<()>>,
+    collector_control: hunter_collectors::FileCollectorControl,
+    collector_metrics: FileCollectorMetrics,
     schema_version: usize,
     worker_count: usize,
     queue_capacity: usize,
@@ -244,6 +315,8 @@ fn worker_loop(database: Database, context: WorkerContext) -> Result<(), DaemonE
         statistics: Arc::clone(&context.statistics),
         terminating: Arc::clone(&context.terminating),
         session_state_lock: Arc::clone(&context.session_state_lock),
+        collector_control: context.collector_control,
+        collector_metrics: context.collector_metrics,
         schema_version: context.schema_version,
         worker_count: context.worker_count,
         queue_capacity: context.queue_capacity,
@@ -254,14 +327,31 @@ fn worker_loop(database: Database, context: WorkerContext) -> Result<(), DaemonE
             .lock()
             .map_err(|_| DaemonError::WorkerStopped)?
             .recv();
-        let Ok(mut stream) = received else {
+        let Ok(work) = received else {
             break;
         };
         context
             .statistics
             .queue_depth
             .fetch_sub(1, Ordering::Relaxed);
-        service.handle_connection(&mut stream);
+        match work {
+            Work::Client(mut stream) => service.handle_connection(&mut stream),
+            Work::File(file) => match service.handle_file(file) {
+                Ok(true) => {
+                    context
+                        .statistics
+                        .analyzed_files
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    context
+                        .statistics
+                        .file_analysis_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            },
+        }
     }
     Ok(())
 }
@@ -271,6 +361,8 @@ struct Service {
     statistics: Arc<Statistics>,
     terminating: Arc<AtomicBool>,
     session_state_lock: Arc<Mutex<()>>,
+    collector_control: hunter_collectors::FileCollectorControl,
+    collector_metrics: FileCollectorMetrics,
     schema_version: usize,
     worker_count: usize,
     queue_capacity: usize,
@@ -339,6 +431,7 @@ impl Service {
                 self.schema_version,
                 self.worker_count,
                 self.queue_capacity,
+                self.collector_metrics.snapshot(),
             ))),
             Request::CreateSession {
                 name,
@@ -358,41 +451,49 @@ impl Service {
                 let lock = Arc::clone(&self.session_state_lock);
                 let _guard = lock.lock().map_err(|_| state_lock_error())?;
                 let mut session = self.require_session(session_id)?;
+                let previous = session.clone();
                 session.start(Timestamp::now()).map_err(invalid_state)?;
-                self.database
-                    .save_session(&session)
-                    .map_err(internal_error)?;
+                self.save_session_activity(&previous, &session, true)?;
                 Ok(Response::Session(session))
             }
             Request::PauseSession { session_id } => {
                 let lock = Arc::clone(&self.session_state_lock);
                 let _guard = lock.lock().map_err(|_| state_lock_error())?;
                 let mut session = self.require_session(session_id)?;
+                let previous = session.clone();
                 session.pause().map_err(invalid_state)?;
-                self.database
-                    .save_session(&session)
-                    .map_err(internal_error)?;
+                self.save_session_activity(&previous, &session, false)?;
                 Ok(Response::Session(session))
             }
             Request::ResumeSession { session_id } => {
                 let lock = Arc::clone(&self.session_state_lock);
                 let _guard = lock.lock().map_err(|_| state_lock_error())?;
                 let mut session = self.require_session(session_id)?;
+                let previous = session.clone();
                 session.resume().map_err(invalid_state)?;
-                self.database
-                    .save_session(&session)
-                    .map_err(internal_error)?;
+                self.save_session_activity(&previous, &session, true)?;
                 Ok(Response::Session(session))
             }
             Request::StopSession { session_id } => {
                 let lock = Arc::clone(&self.session_state_lock);
                 let _guard = lock.lock().map_err(|_| state_lock_error())?;
                 let mut session = self.require_session(session_id)?;
+                let previous = session.clone();
                 session.finish(Timestamp::now()).map_err(invalid_state)?;
-                self.database
-                    .save_session(&session)
-                    .map_err(internal_error)?;
+                self.save_session_activity(&previous, &session, false)?;
                 Ok(Response::Session(session))
+            }
+            Request::AddWatchDirectory {
+                session_id,
+                directory,
+            } => self.add_watch_directory(session_id, directory),
+            Request::RemoveWatchDirectory {
+                session_id,
+                directory,
+            } => self.remove_watch_directory(session_id, directory),
+            Request::ListWatchDirectories { session_id } => {
+                self.require_session(session_id)?;
+                self.watch_directories_response(session_id)
             }
             Request::SubmitText { session_id, text } => {
                 let lock = Arc::clone(&self.session_state_lock);
@@ -441,6 +542,148 @@ impl Service {
             .ok_or_else(|| (ErrorCode::NotFound, "session not found".to_owned()))
     }
 
+    fn save_session_activity(
+        &mut self,
+        previous: &Session,
+        session: &Session,
+        active: bool,
+    ) -> Result<(), (ErrorCode, String)> {
+        self.database
+            .save_session(session)
+            .map_err(internal_error)?;
+        if let Err(error) = self
+            .collector_control
+            .set_session_active(session.id(), active)
+        {
+            self.database
+                .save_session(previous)
+                .map_err(internal_error)?;
+            return Err(collector_control_error(error));
+        }
+        Ok(())
+    }
+
+    fn add_watch_directory(
+        &mut self,
+        session_id: SessionId,
+        directory: String,
+    ) -> Result<Response, (ErrorCode, String)> {
+        let lock = Arc::clone(&self.session_state_lock);
+        let _guard = lock.lock().map_err(|_| state_lock_error())?;
+        let session = self.require_session(session_id)?;
+        if session.status() == SessionStatus::Finished {
+            return Err((
+                ErrorCode::InvalidState,
+                "watch directories cannot be changed for a finished session".to_owned(),
+            ));
+        }
+        let directory = canonical_watch_directory(&directory)?;
+        let inserted = self
+            .database
+            .add_watch_directory(session_id, &directory)
+            .map_err(internal_error)?;
+        let registration = WatchRegistration {
+            session_id,
+            directory: directory.clone(),
+        };
+        if let Err(error) = self.collector_control.register(registration.clone()) {
+            if inserted {
+                self.database
+                    .remove_watch_directory(session_id, &directory)
+                    .map_err(internal_error)?;
+            }
+            return Err(collector_control_error(error));
+        }
+        if session.status() == SessionStatus::Monitoring
+            && let Err(error) = self.collector_control.set_session_active(session_id, true)
+        {
+            let _ = self.collector_control.unregister(registration);
+            if inserted {
+                self.database
+                    .remove_watch_directory(session_id, &directory)
+                    .map_err(internal_error)?;
+            }
+            return Err(collector_control_error(error));
+        }
+        self.watch_directories_response(session_id)
+    }
+
+    fn remove_watch_directory(
+        &mut self,
+        session_id: SessionId,
+        directory: String,
+    ) -> Result<Response, (ErrorCode, String)> {
+        let lock = Arc::clone(&self.session_state_lock);
+        let _guard = lock.lock().map_err(|_| state_lock_error())?;
+        let session = self.require_session(session_id)?;
+        if session.status() == SessionStatus::Finished {
+            return Err((
+                ErrorCode::InvalidState,
+                "watch directories cannot be changed for a finished session".to_owned(),
+            ));
+        }
+        let directory = removable_watch_directory(&directory)?;
+        let removed = self
+            .database
+            .remove_watch_directory(session_id, &directory)
+            .map_err(internal_error)?;
+        if removed {
+            let registration = WatchRegistration {
+                session_id,
+                directory: directory.clone(),
+            };
+            if let Err(error) = self.collector_control.unregister(registration) {
+                self.database
+                    .add_watch_directory(session_id, &directory)
+                    .map_err(internal_error)?;
+                return Err(collector_control_error(error));
+            }
+        }
+        self.watch_directories_response(session_id)
+    }
+
+    fn watch_directories_response(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Response, (ErrorCode, String)> {
+        let directories = self
+            .database
+            .list_watch_directories(session_id)
+            .map_err(internal_error)?
+            .into_iter()
+            .map(|directory| {
+                directory
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| internal_error("stored watch directory is not valid UTF-8"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Response::WatchDirectories {
+            session_id,
+            directories,
+        })
+    }
+
+    fn handle_file(&mut self, file: CollectedFile) -> Result<bool, (ErrorCode, String)> {
+        let lock = Arc::clone(&self.session_state_lock);
+        let _guard = lock.lock().map_err(|_| state_lock_error())?;
+        let session = self.require_session(file.session_id)?;
+        if session.status() != SessionStatus::Monitoring {
+            return Ok(false);
+        }
+        let payload = EventPayload::new(file.bytes).map_err(invalid_request)?;
+        let source_path = SourcePath::new(file.path).map_err(invalid_request)?;
+        let event = CaptureEvent::new(
+            EventId::generate(),
+            file.session_id,
+            Timestamp::now(),
+            SourceMetadata::File(FileSource::new(source_path)),
+            payload,
+        );
+        self.analyze_event(&session, &event)?;
+        Ok(true)
+    }
+
     fn submit_text(
         &mut self,
         session_id: SessionId,
@@ -461,6 +704,18 @@ impl Service {
             SourceMetadata::Manual,
             payload,
         );
+        let finding_ids = self.analyze_event(&session, &event)?;
+        Ok(Response::Submission {
+            event_id: event.id(),
+            finding_ids,
+        })
+    }
+
+    fn analyze_event(
+        &mut self,
+        session: &Session,
+        event: &CaptureEvent,
+    ) -> Result<Vec<hunter_types::FindingId>, (ErrorCode, String)> {
         let patterns = session
             .flag_patterns()
             .iter()
@@ -468,15 +723,10 @@ impl Service {
             .map(FlagPattern::simple);
         let analyzer =
             Analyzer::new(AnalysisConfig::default(), patterns).map_err(internal_error)?;
-        let report = analyzer.analyze(&event).map_err(internal_error)?;
-        let finding_ids = self
-            .database
-            .persist_analysis(&event, &report)
-            .map_err(internal_error)?;
-        Ok(Response::Submission {
-            event_id: event.id(),
-            finding_ids,
-        })
+        let report = analyzer.analyze(event).map_err(internal_error)?;
+        self.database
+            .persist_analysis(event, &report)
+            .map_err(internal_error)
     }
 }
 
@@ -544,6 +794,53 @@ fn state_lock_error() -> (ErrorCode, String) {
     internal_error("session state lock is poisoned")
 }
 
+fn collector_control_error(error: CollectorControlError) -> (ErrorCode, String) {
+    match error {
+        CollectorControlError::Busy => (ErrorCode::Busy, CollectorControlError::Busy.to_string()),
+        other => internal_error(other),
+    }
+}
+
+fn canonical_watch_directory(value: &str) -> Result<PathBuf, (ErrorCode, String)> {
+    let directory = fs::canonicalize(value).map_err(invalid_request)?;
+    if !directory.is_absolute() || !directory.is_dir() {
+        return Err(invalid_request(
+            "watch path must resolve to an existing directory",
+        ));
+    }
+    directory
+        .to_str()
+        .ok_or_else(|| invalid_request("watch directory must be valid UTF-8"))?;
+    Ok(directory)
+}
+
+fn is_restorable_watch_directory(path: &Path) -> bool {
+    path.is_absolute()
+        && fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+}
+
+fn removable_watch_directory(value: &str) -> Result<PathBuf, (ErrorCode, String)> {
+    if let Ok(directory) = fs::canonicalize(value) {
+        return Ok(directory);
+    }
+    let directory = PathBuf::from(value);
+    if !directory.is_absolute()
+        || directory.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+        || directory.to_str().is_none()
+    {
+        return Err(invalid_request(
+            "missing watch directory must be an absolute normalized UTF-8 path",
+        ));
+    }
+    Ok(directory)
+}
+
 fn summary_from_database(value: hunter_database::FindingSummary) -> FindingSummary {
     FindingSummary {
         id: value.id,
@@ -598,7 +895,7 @@ mod tests {
         statistics.queue_depth.store(7, Ordering::Relaxed);
         statistics.rejected_connections.store(3, Ordering::Relaxed);
 
-        let snapshot = statistics.snapshot(1, 4, 64);
+        let snapshot = statistics.snapshot(2, 4, 64, FileCollectorStatistics::default());
 
         assert_eq!(snapshot.queue_depth, 7);
         assert_eq!(snapshot.rejected_connections, 3);
