@@ -2,7 +2,7 @@ mod migrations;
 
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
@@ -76,6 +76,13 @@ pub struct FindingDetail {
     pub summary: FindingSummary,
     pub occurrences: Vec<FindingOccurrence>,
     pub occurrences_truncated: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WatchDirectory {
+    pub session_id: SessionId,
+    pub directory: PathBuf,
+    pub active: bool,
 }
 
 pub struct Database {
@@ -180,6 +187,75 @@ impl Database {
             "flag_patterns": patterns,
         });
         Ok(Some(serde_json::from_value(value)?))
+    }
+
+    pub fn add_watch_directory(&self, session_id: SessionId, directory: &Path) -> Result<bool> {
+        let directory = directory.to_str().ok_or(DatabaseError::Invariant(
+            "watch directory is not valid UTF-8",
+        ))?;
+        Ok(self.connection.execute(
+            "INSERT OR IGNORE INTO session_watch_directories(session_id, directory, created_at)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![session_id.to_string(), directory],
+        )? == 1)
+    }
+
+    pub fn remove_watch_directory(&self, session_id: SessionId, directory: &Path) -> Result<bool> {
+        let directory = directory.to_str().ok_or(DatabaseError::Invariant(
+            "watch directory is not valid UTF-8",
+        ))?;
+        Ok(self.connection.execute(
+            "DELETE FROM session_watch_directories WHERE session_id = ?1 AND directory = ?2",
+            params![session_id.to_string(), directory],
+        )? == 1)
+    }
+
+    pub fn list_watch_directories(&self, session_id: SessionId) -> Result<Vec<PathBuf>> {
+        let mut statement = self.connection.prepare(
+            "SELECT directory FROM session_watch_directories
+             WHERE session_id = ?1 ORDER BY directory",
+        )?;
+        Ok(statement
+            .query_map([session_id.to_string()], |row| {
+                row.get::<_, String>(0).map(PathBuf::from)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn all_watch_directories(&self) -> Result<Vec<WatchDirectory>> {
+        let mut statement = self.connection.prepare(
+            "SELECT w.session_id, w.directory, s.status
+             FROM session_watch_directories w
+             JOIN sessions s ON s.id = w.session_id
+             ORDER BY w.directory, w.session_id",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(session_id, directory, status)| {
+                if !matches!(
+                    status.as_str(),
+                    "inactive" | "monitoring" | "paused" | "finished"
+                ) {
+                    return Err(DatabaseError::Corrupt {
+                        field: "session status",
+                        value: status,
+                    });
+                }
+                Ok(WatchDirectory {
+                    session_id: parse_id(&session_id, "session id")?,
+                    directory: PathBuf::from(directory),
+                    active: status == "monitoring",
+                })
+            })
+            .collect()
     }
 
     pub fn persist_analysis(
@@ -665,7 +741,7 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let database = Database::open(directory.path().join("hunter.db")).expect("database");
 
-        assert_eq!(database.schema_version().expect("version"), 1);
+        assert_eq!(database.schema_version().expect("version"), 2);
         assert_eq!(database.journal_mode().expect("journal"), "wal");
         let columns = database
             .connection
@@ -754,6 +830,58 @@ mod tests {
     }
 
     #[test]
+    fn watch_directories_survive_restart_and_follow_session_state() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("hunter.db");
+        let watched = directory.path().join("watched");
+        std::fs::create_dir(&watched).expect("watch directory");
+        let mut session = session();
+        session.pause().expect("pause");
+
+        {
+            let mut database = Database::open(&path).expect("database");
+            database.save_session(&session).expect("save session");
+            assert!(
+                database
+                    .add_watch_directory(session.id(), &watched)
+                    .expect("add watch")
+            );
+            assert!(
+                !database
+                    .add_watch_directory(session.id(), &watched)
+                    .expect("deduplicate watch")
+            );
+        }
+
+        let database = Database::open(&path).expect("reopen");
+        assert_eq!(
+            database
+                .list_watch_directories(session.id())
+                .expect("list watches"),
+            vec![watched.clone()]
+        );
+        assert_eq!(
+            database.all_watch_directories().expect("all watches"),
+            vec![WatchDirectory {
+                session_id: session.id(),
+                directory: watched.clone(),
+                active: false,
+            }]
+        );
+        assert!(
+            database
+                .remove_watch_directory(session.id(), &watched)
+                .expect("remove watch")
+        );
+        assert!(
+            database
+                .list_watch_directories(session.id())
+                .expect("empty watches")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn rejects_a_schema_newer_than_the_binary() {
         let directory = tempdir().expect("tempdir");
         let path = directory.path().join("hunter.db");
@@ -761,7 +889,7 @@ mod tests {
         database
             .connection
             .execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (2, 'now')",
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (3, 'now')",
                 [],
             )
             .expect("future migration");
@@ -770,8 +898,8 @@ mod tests {
         assert!(matches!(
             Database::open(&path),
             Err(DatabaseError::UnsupportedSchema {
-                found: 2,
-                supported: 1
+                found: 3,
+                supported: 2
             })
         ));
     }

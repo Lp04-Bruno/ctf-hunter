@@ -39,6 +39,17 @@ fn parse_args() -> Result<(PathBuf, Request), String> {
         "stop" => Request::StopSession {
             session_id: session_id(&mut args)?,
         },
+        "add-watch" => Request::AddWatchDirectory {
+            session_id: session_id(&mut args)?,
+            directory: next(&mut args, "directory")?,
+        },
+        "remove-watch" => Request::RemoveWatchDirectory {
+            session_id: session_id(&mut args)?,
+            directory: next(&mut args, "directory")?,
+        },
+        "watches" => Request::ListWatchDirectories {
+            session_id: session_id(&mut args)?,
+        },
         "submit" => Request::SubmitText {
             session_id: session_id(&mut args)?,
             text: next(&mut args, "text")?,
@@ -71,5 +82,5 @@ fn next(args: &mut impl Iterator<Item = String>, name: &str) -> Result<String, S
 }
 
 const fn usage() -> &'static str {
-    "usage: ctf-hunterctl --socket PATH <status|create NAME [PATTERN...]|start ID|pause ID|resume ID|stop ID|submit ID TEXT|list ID [LIMIT]|finding ID|shutdown>"
+    "usage: ctf-hunterctl --socket PATH <status|create NAME [PATTERN...]|start ID|pause ID|resume ID|stop ID|add-watch ID DIR|remove-watch ID DIR|watches ID|submit ID TEXT|list ID [LIMIT]|finding ID|shutdown>"
 }

@@ -1,0 +1,19 @@
+[package]
+name = "hunter-collectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+blake3.workspace = true
+hunter-types = { path = "../hunter-types" }
+inotify.workspace = true
+nix.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

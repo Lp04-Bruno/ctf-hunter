@@ -12,13 +12,18 @@ use hunter_ipc::{
     ErrorCode, IpcClient, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request, RequestEnvelope, Response,
     ResponseEnvelope, read_frame,
 };
+use hunter_types::SourceMetadata;
 use tempfile::tempdir;
 
 fn start(config: DaemonConfig) -> thread::JoinHandle<Result<(), ctf_hunterd::DaemonError>> {
     let socket = config.socket_path.clone();
     let handle = thread::spawn(move || run(config, Arc::new(AtomicBool::new(false))));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while !socket.exists() {
+        if handle.is_finished() {
+            let result = handle.join().expect("daemon thread");
+            panic!("daemon exited before creating its socket: {result:?}");
+        }
         assert!(
             Instant::now() < deadline,
             "daemon did not create its socket"
@@ -49,6 +54,29 @@ fn shutdown(
     );
     handle.join().expect("daemon thread").expect("daemon exit");
     assert!(!config.socket_path.exists());
+}
+
+fn wait_for_findings(config: &DaemonConfig, session_id: hunter_types::SessionId, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = request(
+            config,
+            800,
+            Request::ListFindings {
+                session_id,
+                offset: 0,
+                limit: 20,
+            },
+        );
+        if matches!(response, Response::Findings { ref findings } if findings.len() == count) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "finding count did not reach {count}"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 #[test]
@@ -146,7 +174,7 @@ fn analyzes_queries_and_recovers_findings_after_restart() {
     }
     match request(&config, 6, Request::GetStatus) {
         Response::Status(status) => {
-            assert_eq!(status.schema_version, 1);
+            assert_eq!(status.schema_version, 2);
             assert_eq!(status.worker_count, 4);
             assert_eq!(status.queue_capacity, 64);
             assert!(status.completed_requests >= 3);
@@ -173,6 +201,194 @@ fn analyzes_queries_and_recovers_findings_after_restart() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+    shutdown(&config, restarted);
+}
+
+#[test]
+fn watches_files_by_content_and_restores_watches_after_restart() {
+    let directory = tempdir().expect("tempdir");
+    let watched = directory.path().join("watched");
+    fs::create_dir(&watched).expect("watch directory");
+    let config = DaemonConfig::new(
+        directory.path().join("data/hunter.db"),
+        directory.path().join("runtime/daemon.sock"),
+    );
+    let daemon = start(config.clone());
+    let session = match request(
+        &config,
+        100,
+        Request::CreateSession {
+            name: "File watch test".to_owned(),
+            flag_patterns: vec!["FLAG{*}".to_owned()],
+        },
+    ) {
+        Response::Session(session) => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let watched_text = watched.to_str().expect("UTF-8 path").to_owned();
+    assert_eq!(
+        request(
+            &config,
+            101,
+            Request::AddWatchDirectory {
+                session_id: session.id(),
+                directory: watched_text.clone(),
+            },
+        ),
+        Response::WatchDirectories {
+            session_id: session.id(),
+            directories: vec![watched_text.clone()],
+        }
+    );
+    assert!(matches!(
+        request(
+            &config,
+            102,
+            Request::StartSession {
+                session_id: session.id(),
+            },
+        ),
+        Response::Session(_)
+    ));
+
+    let first_path = watched.join("response.unknown");
+    fs::write(
+        &first_path,
+        br#"{"profile":{"payload":"RkxBR3tmaWxlX3dhdGNoZWR9"}}"#,
+    )
+    .expect("write first file");
+    wait_for_findings(&config, session.id(), 1);
+    thread::sleep(Duration::from_millis(250));
+    wait_for_findings(&config, session.id(), 1);
+    shutdown(&config, daemon);
+
+    let restarted = start(config.clone());
+    assert_eq!(
+        request(
+            &config,
+            103,
+            Request::ListWatchDirectories {
+                session_id: session.id(),
+            },
+        ),
+        Response::WatchDirectories {
+            session_id: session.id(),
+            directories: vec![watched_text.clone()],
+        }
+    );
+    let second_path = watched.join("renamed.bin");
+    let staged = directory.path().join("staged.bin");
+    fs::write(&staged, b"RkxBR3thZnRlcl9yZXN1bWV9").expect("stage file");
+    fs::rename(staged, &second_path).expect("move file into watch");
+    wait_for_findings(&config, session.id(), 2);
+
+    let findings = match request(
+        &config,
+        104,
+        Request::ListFindings {
+            session_id: session.id(),
+            offset: 0,
+            limit: 20,
+        },
+    ) {
+        Response::Findings { findings } => findings,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    let finding = findings
+        .iter()
+        .find(|finding| finding.value == "FLAG{after_resume}")
+        .expect("file finding");
+    match request(
+        &config,
+        105,
+        Request::GetFinding {
+            finding_id: finding.id,
+        },
+    ) {
+        Response::Finding {
+            finding: Some(detail),
+        } => match &detail.occurrences[0].source {
+            SourceMetadata::File(source) => assert_eq!(source.path(), second_path),
+            other => panic!("unexpected source: {other:?}"),
+        },
+        other => panic!("unexpected response: {other:?}"),
+    }
+    match request(&config, 106, Request::GetStatus) {
+        Response::Status(status) => {
+            assert!(status.file_collector.files_read >= 1);
+            assert!(status.file_collector.analyzed_files >= 1);
+            assert_eq!(status.file_collector.analysis_errors, 0);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    assert_eq!(
+        request(
+            &config,
+            107,
+            Request::RemoveWatchDirectory {
+                session_id: session.id(),
+                directory: watched_text,
+            },
+        ),
+        Response::WatchDirectories {
+            session_id: session.id(),
+            directories: Vec::new(),
+        }
+    );
+    fs::write(watched.join("ignored.txt"), b"FLAG{ignored}").expect("write ignored file");
+    thread::sleep(Duration::from_millis(250));
+    wait_for_findings(&config, session.id(), 2);
+    shutdown(&config, restarted);
+}
+
+#[test]
+fn activates_a_watch_added_to_a_restored_monitoring_session() {
+    let directory = tempdir().expect("tempdir");
+    let watched = directory.path().join("watched");
+    fs::create_dir(&watched).expect("watch directory");
+    let config = DaemonConfig::new(
+        directory.path().join("data/hunter.db"),
+        directory.path().join("runtime/daemon.sock"),
+    );
+    let daemon = start(config.clone());
+    let session = match request(
+        &config,
+        150,
+        Request::CreateSession {
+            name: "Late watch test".to_owned(),
+            flag_patterns: vec!["FLAG{*}".to_owned()],
+        },
+    ) {
+        Response::Session(session) => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert!(matches!(
+        request(
+            &config,
+            151,
+            Request::StartSession {
+                session_id: session.id(),
+            },
+        ),
+        Response::Session(_)
+    ));
+    shutdown(&config, daemon);
+
+    let restarted = start(config.clone());
+    assert!(matches!(
+        request(
+            &config,
+            152,
+            Request::AddWatchDirectory {
+                session_id: session.id(),
+                directory: watched.to_str().expect("UTF-8 path").to_owned(),
+            },
+        ),
+        Response::WatchDirectories { .. }
+    ));
+    fs::write(watched.join("late.bin"), b"FLAG{late_watch}").expect("watched file");
+    wait_for_findings(&config, session.id(), 1);
     shutdown(&config, restarted);
 }
 
