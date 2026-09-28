@@ -12,9 +12,9 @@ use aya_ebpf::{
     programs::FEntryContext,
 };
 use ctf_hunter_common::{
-    CAPTURE_BYTES, CaptureEvent, CaptureKind, FLAG_TRUNCATED, JobKey, MAX_SELECTED_TTYS,
-    MAX_TAINTED_JOBS, RING_BYTES, STAT_BACKGROUND_FILTERED, STAT_COUNT, STAT_EMITTED,
-    STAT_FAIL_CLOSED, STAT_INITIAL_FILTERED, STAT_MAP_FAILED, STAT_PROCESS_FILTERED,
+    CAPTURE_BYTES, CaptureEvent, CaptureKind, FLAG_TRUNCATED, FailureReason, JobKey,
+    MAX_SELECTED_TTYS, MAX_TAINTED_JOBS, RING_BYTES, STAT_BACKGROUND_FILTERED, STAT_COUNT,
+    STAT_EMITTED, STAT_FAIL_CLOSED, STAT_INITIAL_FILTERED, STAT_MAP_FAILED, STAT_PROCESS_FILTERED,
     STAT_READ_FAILED, STAT_READ_MARKED, STAT_RING_DROPPED, STAT_SEEN, STAT_STRUCTURE_FAILED,
     STAT_TAINT_FILTERED, STAT_TRUNCATED, STAT_TTY_FILTERED, STAT_UID_FILTERED,
 };
@@ -35,10 +35,16 @@ static SIGNAL_PGID_OFFSET: Global<u32> = Global::new(u32::MAX);
 static TTY_PGRP_OFFSET: Global<u32> = Global::new(u32::MAX);
 
 #[unsafe(no_mangle)]
-static TTY_DEVICE_OFFSET: Global<u32> = Global::new(u32::MAX);
+static TTY_INDEX_OFFSET: Global<u32> = Global::new(u32::MAX);
 
 #[unsafe(no_mangle)]
-static DEVICE_DEVT_OFFSET: Global<u32> = Global::new(u32::MAX);
+static TTY_DRIVER_OFFSET: Global<u32> = Global::new(u32::MAX);
+
+#[unsafe(no_mangle)]
+static DRIVER_MAJOR_OFFSET: Global<u32> = Global::new(u32::MAX);
+
+#[unsafe(no_mangle)]
+static DRIVER_MINOR_START_OFFSET: Global<u32> = Global::new(u32::MAX);
 
 #[map]
 static SELECTED_TTYS: HashMap<u32, u8> = HashMap::with_max_entries(MAX_SELECTED_TTYS, 0);
@@ -69,7 +75,10 @@ fn try_mark_tty_read(tty: *const u8) -> Result<(), i32> {
     if fail_closed() || !selected_tty(tty)? {
         return Ok(());
     }
-    let process_group = current_process_group()?;
+    let process_group = current_process_group();
+    if process_group == u64::MAX {
+        return Err(-1);
+    }
     mark_tainted(JobKey {
         tty: tty as u64,
         process_group,
@@ -93,8 +102,14 @@ fn try_observe_tty_write(tty: *const u8, buffer: *const u8, count: usize) -> Res
         return Ok(());
     }
 
-    let process_group = current_process_group()?;
-    let foreground_group = tty_foreground_group(tty)?;
+    let process_group = current_process_group();
+    if process_group == u64::MAX {
+        return Err(-1);
+    }
+    let foreground_group = tty_foreground_group(tty);
+    if foreground_group == u64::MAX {
+        return Err(-1);
+    }
     if process_group != foreground_group {
         increment(STAT_BACKGROUND_FILTERED);
         return Ok(());
@@ -132,15 +147,49 @@ fn eligible_process() -> bool {
 
 fn selected_tty(tty: *const u8) -> Result<bool, i32> {
     if tty.is_null() {
-        structure_failure();
+        structure_failure(FailureReason::TtyArgument);
         return Err(-1);
     }
-    let device: u64 = read_kernel(tty, TTY_DEVICE_OFFSET.load())?;
-    if device == 0 {
-        structure_failure();
+    let index = read_kernel_u32(tty, TTY_INDEX_OFFSET.load(), FailureReason::TtyIndex);
+    if index == u32::MAX {
         return Err(-1);
     }
-    let devt: u32 = read_kernel(device as *const u8, DEVICE_DEVT_OFFSET.load())?;
+    let driver = read_kernel_u64(
+        tty,
+        TTY_DRIVER_OFFSET.load(),
+        FailureReason::TtyDriverPointer,
+    );
+    if driver == u64::MAX {
+        return Err(-1);
+    }
+    if driver == 0 {
+        structure_failure(FailureReason::TtyDriverPointer);
+        return Err(-1);
+    }
+    let major = read_kernel_u32(
+        driver as *const u8,
+        DRIVER_MAJOR_OFFSET.load(),
+        FailureReason::TtyDriverNumber,
+    );
+    let minor_start = read_kernel_u32(
+        driver as *const u8,
+        DRIVER_MINOR_START_OFFSET.load(),
+        FailureReason::TtyDriverNumber,
+    );
+    if major == u32::MAX || minor_start == u32::MAX {
+        return Err(-1);
+    }
+    const MAX_MAJOR: u32 = 1 << 12;
+    const MAX_MINOR: u32 = 1 << 20;
+    if major >= MAX_MAJOR
+        || minor_start >= MAX_MINOR
+        || index >= MAX_MINOR
+        || minor_start > (MAX_MINOR - 1) - index
+    {
+        structure_failure(FailureReason::TtyDriverNumber);
+        return Err(-1);
+    }
+    let devt = (major << 20) | (minor_start + index);
     if SELECTED_TTYS.get_ptr(&devt).is_none() {
         increment(STAT_TTY_FILTERED);
         return Ok(false);
@@ -148,40 +197,75 @@ fn selected_tty(tty: *const u8) -> Result<bool, i32> {
     Ok(true)
 }
 
-fn current_process_group() -> Result<u64, i32> {
+fn current_process_group() -> u64 {
     let task = unsafe { aya_ebpf::helpers::generated::bpf_get_current_task() } as *const u8;
-    let signal: u64 = read_kernel(task, TASK_SIGNAL_OFFSET.load())?;
+    let signal = read_kernel_u64(
+        task,
+        TASK_SIGNAL_OFFSET.load(),
+        FailureReason::TaskSignalPointer,
+    );
+    if signal == u64::MAX {
+        return u64::MAX;
+    }
     if signal == 0 {
-        structure_failure();
-        return Err(-1);
+        structure_failure(FailureReason::TaskSignalPointer);
+        return u64::MAX;
     }
-    let process_group: u64 = read_kernel(signal as *const u8, SIGNAL_PGID_OFFSET.load())?;
+    let process_group = read_kernel_u64(
+        signal as *const u8,
+        SIGNAL_PGID_OFFSET.load(),
+        FailureReason::ProcessGroupPointer,
+    );
+    if process_group == u64::MAX {
+        return u64::MAX;
+    }
     if process_group == 0 {
-        structure_failure();
-        return Err(-1);
+        structure_failure(FailureReason::ProcessGroupPointer);
+        return u64::MAX;
     }
-    Ok(process_group)
+    process_group
 }
 
-fn tty_foreground_group(tty: *const u8) -> Result<u64, i32> {
-    let process_group: u64 = read_kernel(tty, TTY_PGRP_OFFSET.load())?;
-    if process_group == 0 {
-        structure_failure();
-        return Err(-1);
+fn tty_foreground_group(tty: *const u8) -> u64 {
+    let process_group = read_kernel_u64(
+        tty,
+        TTY_PGRP_OFFSET.load(),
+        FailureReason::ForegroundProcessGroup,
+    );
+    if process_group == u64::MAX {
+        return u64::MAX;
     }
-    Ok(process_group)
+    if process_group == 0 {
+        structure_failure(FailureReason::ForegroundProcessGroup);
+        return u64::MAX;
+    }
+    process_group
 }
 
-fn read_kernel<T: Copy>(base: *const u8, offset: u32) -> Result<T, i32> {
+fn read_kernel_u64(base: *const u8, offset: u32, reason: FailureReason) -> u64 {
     if base.is_null() || offset == u32::MAX {
-        structure_failure();
-        return Err(-1);
+        structure_failure(reason);
+        return u64::MAX;
     }
-    match unsafe { bpf_probe_read_kernel(base.add(offset as usize).cast::<T>()) } {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            structure_failure();
-            Err(error)
+    match unsafe { bpf_probe_read_kernel(base.add(offset as usize).cast::<u64>()) } {
+        Ok(value) => value,
+        Err(_) => {
+            structure_failure(reason);
+            u64::MAX
+        }
+    }
+}
+
+fn read_kernel_u32(base: *const u8, offset: u32, reason: FailureReason) -> u32 {
+    if base.is_null() || offset == u32::MAX {
+        structure_failure(reason);
+        return u32::MAX;
+    }
+    match unsafe { bpf_probe_read_kernel(base.add(offset as usize).cast::<u32>()) } {
+        Ok(value) => value,
+        Err(_) => {
+            structure_failure(reason);
+            u32::MAX
         }
     }
 }
@@ -236,7 +320,7 @@ fn capture(source: *const u8, requested: usize) -> Result<(), i32> {
     event.flags = flags;
     event.comm = bpf_get_current_comm().unwrap_or([0; 16]);
     if unsafe {
-        aya_ebpf::helpers::generated::bpf_probe_read_user(
+        aya_ebpf::helpers::generated::bpf_probe_read_kernel(
             event.data.as_mut_ptr().cast(),
             captured as u32,
             source.cast(),
@@ -252,23 +336,27 @@ fn capture(source: *const u8, requested: usize) -> Result<(), i32> {
     Ok(())
 }
 
-fn structure_failure() {
+fn structure_failure(reason: FailureReason) {
     increment(STAT_STRUCTURE_FAILED);
-    set_fail_closed();
+    set_fail_closed(reason);
 }
 
 fn map_failure() {
     increment(STAT_MAP_FAILED);
-    set_fail_closed();
+    set_fail_closed(FailureReason::MapMutation);
 }
 
 fn fail_closed() -> bool {
     FAIL_STATE.get(0).is_none_or(|value| *value != 0)
 }
 
-fn set_fail_closed() {
+fn set_fail_closed(reason: FailureReason) {
     if let Some(value) = FAIL_STATE.get_ptr_mut(0) {
-        unsafe { *value = 1 };
+        unsafe {
+            if *value == 0 {
+                *value = reason as u32;
+            }
+        };
     }
     increment(STAT_FAIL_CLOSED);
 }

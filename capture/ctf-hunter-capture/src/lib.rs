@@ -66,4 +66,15 @@ mod tests {
             assert!(!read_hook.contains(forbidden), "found {forbidden}");
         }
     }
+
+    #[test]
+    fn ebpf_helpers_use_single_register_return_values() {
+        assert!(!EBPF_SOURCE.contains("Result<u64"));
+    }
+
+    #[test]
+    fn tty_output_uses_the_kernel_write_buffer() {
+        assert!(!EBPF_SOURCE.contains("bpf_probe_read_user"));
+        assert!(EBPF_SOURCE.contains("bpf_probe_read_kernel"));
+    }
 }

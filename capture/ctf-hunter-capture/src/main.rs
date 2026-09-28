@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeSet,
+    io::{self, Write as _},
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
@@ -8,7 +9,7 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use aya::{
     Btf, EbpfLoader,
-    maps::{HashMap, PerCpuArray, RingBuf},
+    maps::{Array, HashMap, PerCpuArray, RingBuf},
     programs::FEntry,
 };
 use ctf_hunter_capture::{
@@ -16,8 +17,8 @@ use ctf_hunter_capture::{
     terminal_device_key,
 };
 use ctf_hunter_common::{
-    CaptureEvent, MAX_SELECTED_TTYS, STAT_BACKGROUND_FILTERED, STAT_COUNT, STAT_EMITTED,
-    STAT_FAIL_CLOSED, STAT_INITIAL_FILTERED, STAT_MAP_FAILED, STAT_PROCESS_FILTERED,
+    CaptureEvent, FailureReason, MAX_SELECTED_TTYS, STAT_BACKGROUND_FILTERED, STAT_COUNT,
+    STAT_EMITTED, STAT_FAIL_CLOSED, STAT_INITIAL_FILTERED, STAT_MAP_FAILED, STAT_PROCESS_FILTERED,
     STAT_READ_FAILED, STAT_READ_MARKED, STAT_RING_DROPPED, STAT_SEEN, STAT_STRUCTURE_FAILED,
     STAT_TAINT_FILTERED, STAT_TRUNCATED, STAT_TTY_FILTERED, STAT_UID_FILTERED,
 };
@@ -112,12 +113,14 @@ fn preflight() -> Result<KernelLayout> {
     Btf::from_sys_fs().context("load kernel BTF from /sys/kernel/btf/vmlinux")?;
     let layout = KernelLayout::from_path(Path::new(KERNEL_BTF)).map_err(anyhow::Error::msg)?;
     println!(
-        "kernel BTF: compatible task_signal={} signal_pgid={} tty_pgrp={} tty_device={} device_devt={}",
+        "kernel BTF: compatible task_signal={} signal_pgid={} tty_pgrp={} tty_index={} tty_driver={} driver_major={} driver_minor_start={}",
         layout.task_signal,
         layout.signal_pgid,
         layout.tty_pgrp,
-        layout.tty_device,
-        layout.device_devt,
+        layout.tty_index,
+        layout.tty_driver,
+        layout.driver_major,
+        layout.driver_minor_start,
     );
     Ok(layout)
 }
@@ -149,8 +152,14 @@ fn run(options: RunOptions) -> Result<()> {
         .override_global("TASK_SIGNAL_OFFSET", &layout.task_signal, true)
         .override_global("SIGNAL_PGID_OFFSET", &layout.signal_pgid, true)
         .override_global("TTY_PGRP_OFFSET", &layout.tty_pgrp, true)
-        .override_global("TTY_DEVICE_OFFSET", &layout.tty_device, true)
-        .override_global("DEVICE_DEVT_OFFSET", &layout.device_devt, true)
+        .override_global("TTY_INDEX_OFFSET", &layout.tty_index, true)
+        .override_global("TTY_DRIVER_OFFSET", &layout.tty_driver, true)
+        .override_global("DRIVER_MAJOR_OFFSET", &layout.driver_major, true)
+        .override_global(
+            "DRIVER_MINOR_START_OFFSET",
+            &layout.driver_minor_start,
+            true,
+        )
         .load(bytes)
         .context("load eBPF object")?;
 
@@ -172,8 +181,14 @@ fn run(options: RunOptions) -> Result<()> {
 
     let events = ebpf.take_map("EVENTS").context("EVENTS map missing")?;
     let stats = ebpf.take_map("STATS").context("STATS map missing")?;
+    let fail_state = ebpf
+        .take_map("FAIL_STATE")
+        .context("FAIL_STATE map missing")?;
     let mut ring = RingBuf::try_from(events).context("open EVENTS ring buffer")?;
     let stats: PerCpuArray<_, u64> = PerCpuArray::try_from(stats).context("open STATS map")?;
+    let fail_state: Array<_, u32> = Array::try_from(fail_state).context("open FAIL_STATE map")?;
+    println!("capture ready");
+    io::stdout().flush().context("flush readiness signal")?;
     let deadline = Instant::now() + options.duration;
     let mut accepted = 0_u64;
 
@@ -200,8 +215,9 @@ fn run(options: RunOptions) -> Result<()> {
     }
 
     let counters = read_counters(&stats)?;
+    let failure_reason = fail_state.get(&0, 0)?;
     println!(
-        "summary accepted={accepted} seen={} emitted={} read_marked={} taint_filtered={} initial_filtered={} background_filtered={} tty_filtered={} uid_filtered={} process_filtered={} structure_failed={} map_failed={} fail_closed={} ring_dropped={} read_failed={} truncated={}",
+        "summary accepted={accepted} seen={} emitted={} read_marked={} taint_filtered={} initial_filtered={} background_filtered={} tty_filtered={} uid_filtered={} process_filtered={} structure_failed={} map_failed={} fail_closed={} failure_reason={} ring_dropped={} read_failed={} truncated={}",
         counters[STAT_SEEN as usize],
         counters[STAT_EMITTED as usize],
         counters[STAT_READ_MARKED as usize],
@@ -214,11 +230,27 @@ fn run(options: RunOptions) -> Result<()> {
         counters[STAT_STRUCTURE_FAILED as usize],
         counters[STAT_MAP_FAILED as usize],
         counters[STAT_FAIL_CLOSED as usize],
+        failure_reason_name(failure_reason),
         counters[STAT_RING_DROPPED as usize],
         counters[STAT_READ_FAILED as usize],
         counters[STAT_TRUNCATED as usize],
     );
     Ok(())
+}
+
+fn failure_reason_name(value: u32) -> &'static str {
+    match FailureReason::from_u32(value) {
+        Some(FailureReason::None) => "none",
+        Some(FailureReason::TtyArgument) => "tty_argument",
+        Some(FailureReason::TtyIndex) => "tty_index",
+        Some(FailureReason::TtyDriverPointer) => "tty_driver_pointer",
+        Some(FailureReason::TtyDriverNumber) => "tty_driver_number",
+        Some(FailureReason::TaskSignalPointer) => "task_signal_pointer",
+        Some(FailureReason::ProcessGroupPointer) => "process_group_pointer",
+        Some(FailureReason::ForegroundProcessGroup) => "foreground_process_group",
+        Some(FailureReason::MapMutation) => "map_mutation",
+        None => "unknown",
+    }
 }
 
 fn selected_devices(paths: &[PathBuf]) -> Result<BTreeSet<u32>> {

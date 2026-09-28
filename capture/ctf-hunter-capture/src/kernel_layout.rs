@@ -12,8 +12,10 @@ pub struct KernelLayout {
     pub task_signal: u32,
     pub signal_pgid: u32,
     pub tty_pgrp: u32,
-    pub tty_device: u32,
-    pub device_devt: u32,
+    pub tty_index: u32,
+    pub tty_driver: u32,
+    pub driver_major: u32,
+    pub driver_minor_start: u32,
 }
 
 impl KernelLayout {
@@ -37,11 +39,16 @@ impl KernelLayout {
         }
 
         let tty = btf.named_struct("tty_struct")?;
-        let (tty_device, device_pointer) = btf.member(tty, "dev")?;
-        let device = btf.pointed_struct(device_pointer, "device")?;
-        let (device_devt, devt_type) = btf.member(device, "devt")?;
-        if btf.type_size(devt_type)? != 4 {
-            return Err("device.devt is not a 32-bit dev_t".to_owned());
+        let (tty_index, index_type) = btf.member(tty, "index")?;
+        if btf.type_size(index_type)? != 4 {
+            return Err("tty_struct.index is not 32-bit".to_owned());
+        }
+        let (tty_driver, driver_pointer) = btf.member(tty, "driver")?;
+        let driver = btf.pointed_struct(driver_pointer, "tty_driver")?;
+        let (driver_major, major_type) = btf.member(driver, "major")?;
+        let (driver_minor_start, minor_start_type) = btf.member(driver, "minor_start")?;
+        if btf.type_size(major_type)? != 4 || btf.type_size(minor_start_type)? != 4 {
+            return Err("tty_driver device numbers are not 32-bit".to_owned());
         }
         let (tty_ctrl, ctrl_type) = btf.member(tty, "ctrl")?;
         let (ctrl_pgrp, pgrp_type) = btf.member(btf.resolve(ctrl_type)?, "pgrp")?;
@@ -55,8 +62,10 @@ impl KernelLayout {
             task_signal,
             signal_pgid: signal_pids + (2 * pointer_size),
             tty_pgrp: tty_ctrl + ctrl_pgrp,
-            tty_device,
-            device_devt,
+            tty_index,
+            tty_driver,
+            driver_major,
+            driver_minor_start,
         })
     }
 }
@@ -320,8 +329,10 @@ mod tests {
         assert_ne!(layout.task_signal, u32::MAX);
         assert_ne!(layout.signal_pgid, u32::MAX);
         assert_ne!(layout.tty_pgrp, u32::MAX);
-        assert_ne!(layout.tty_device, u32::MAX);
-        assert_ne!(layout.device_devt, u32::MAX);
+        assert_ne!(layout.tty_index, u32::MAX);
+        assert_ne!(layout.tty_driver, u32::MAX);
+        assert_ne!(layout.driver_major, u32::MAX);
+        assert_ne!(layout.driver_minor_start, u32::MAX);
     }
 
     #[test]
