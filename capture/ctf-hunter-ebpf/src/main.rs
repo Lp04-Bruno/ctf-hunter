@@ -5,22 +5,19 @@ use aya_ebpf::{
     Global,
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_get_current_uid_gid, bpf_ktime_get_ns,
-        bpf_probe_read_user,
+        bpf_probe_read_kernel,
     },
-    macros::{map, tracepoint},
-    maps::{PerCpuArray, RingBuf},
-    programs::TracePointContext,
+    macros::{fentry, map},
+    maps::{Array, HashMap, PerCpuArray, RingBuf},
+    programs::FEntryContext,
 };
 use ctf_hunter_common::{
-    CAPTURE_BYTES, CaptureEvent, FLAG_CONTINUATION, FLAG_TRUNCATED, MAX_WRITEV_SEGMENTS,
-    RING_BYTES, STAT_COUNT, STAT_EMITTED, STAT_PROCESS_FILTERED, STAT_READ_FAILED,
-    STAT_RING_DROPPED, STAT_SEEN, STAT_TRUNCATED, STAT_UID_FILTERED, STAT_WRITE, STAT_WRITEV,
-    SyscallKind, is_blocked_comm,
+    CAPTURE_BYTES, CaptureEvent, CaptureKind, FLAG_TRUNCATED, JobKey, MAX_SELECTED_TTYS,
+    MAX_TAINTED_JOBS, RING_BYTES, STAT_BACKGROUND_FILTERED, STAT_COUNT, STAT_EMITTED,
+    STAT_FAIL_CLOSED, STAT_INITIAL_FILTERED, STAT_MAP_FAILED, STAT_PROCESS_FILTERED,
+    STAT_READ_FAILED, STAT_READ_MARKED, STAT_RING_DROPPED, STAT_SEEN, STAT_STRUCTURE_FAILED,
+    STAT_TAINT_FILTERED, STAT_TRUNCATED, STAT_TTY_FILTERED, STAT_UID_FILTERED,
 };
-
-const ARG0_OFFSET: usize = 16;
-const ARG1_OFFSET: usize = 24;
-const ARG2_OFFSET: usize = 32;
 
 #[unsafe(no_mangle)]
 static TARGET_UID: Global<u32> = Global::new(u32::MAX);
@@ -28,155 +25,216 @@ static TARGET_UID: Global<u32> = Global::new(u32::MAX);
 #[unsafe(no_mangle)]
 static SELF_PID: Global<u32> = Global::new(0);
 
+#[unsafe(no_mangle)]
+static TASK_SIGNAL_OFFSET: Global<u32> = Global::new(u32::MAX);
+
+#[unsafe(no_mangle)]
+static SIGNAL_PGID_OFFSET: Global<u32> = Global::new(u32::MAX);
+
+#[unsafe(no_mangle)]
+static TTY_PGRP_OFFSET: Global<u32> = Global::new(u32::MAX);
+
+#[unsafe(no_mangle)]
+static TTY_DEVICE_OFFSET: Global<u32> = Global::new(u32::MAX);
+
+#[unsafe(no_mangle)]
+static DEVICE_DEVT_OFFSET: Global<u32> = Global::new(u32::MAX);
+
+#[map]
+static SELECTED_TTYS: HashMap<u32, u8> = HashMap::with_max_entries(MAX_SELECTED_TTYS, 0);
+
+#[map]
+static TAINTED_JOBS: HashMap<JobKey, u8> = HashMap::with_max_entries(MAX_TAINTED_JOBS, 0);
+
+#[map]
+static INITIALIZED_TTYS: HashMap<u64, u8> = HashMap::with_max_entries(MAX_SELECTED_TTYS, 0);
+
+#[map]
+static FAIL_STATE: Array<u32> = Array::with_max_entries(1, 0);
+
 #[map]
 static EVENTS: RingBuf = RingBuf::with_byte_size(RING_BYTES, 0);
 
 #[map]
 static STATS: PerCpuArray<u64> = PerCpuArray::with_max_entries(STAT_COUNT, 0);
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct IoVec {
-    base: *const u8,
-    len: usize,
-}
-
-#[tracepoint]
-pub fn observe_write(ctx: TracePointContext) -> u32 {
-    let _ = try_observe_write(ctx);
+#[fentry(function = "n_tty_read")]
+pub fn mark_tty_read(ctx: FEntryContext) -> u32 {
+    let tty: *const u8 = ctx.arg(0);
+    let _ = try_mark_tty_read(tty);
     0
 }
 
-fn try_observe_write(ctx: TracePointContext) -> Result<(), i32> {
-    let Some(metadata) = metadata(SyscallKind::Write) else {
-        return Ok(());
-    };
-    let fd: i64 = unsafe { ctx.read_at(ARG0_OFFSET)? };
-    let buffer: *const u8 = unsafe { ctx.read_at(ARG1_OFFSET)? };
-    let count: u64 = unsafe { ctx.read_at(ARG2_OFFSET)? };
-    capture(metadata, fd as i32, buffer, count, 0)
-}
-
-#[tracepoint]
-pub fn observe_writev(ctx: TracePointContext) -> u32 {
-    let _ = try_observe_writev(ctx);
-    0
-}
-
-fn try_observe_writev(ctx: TracePointContext) -> Result<(), i32> {
-    let Some(metadata) = metadata(SyscallKind::WriteV) else {
-        return Ok(());
-    };
-    let fd: i64 = unsafe { ctx.read_at(ARG0_OFFSET)? };
-    let vectors: *const IoVec = unsafe { ctx.read_at(ARG1_OFFSET)? };
-    let count: u64 = unsafe { ctx.read_at(ARG2_OFFSET)? };
-    if count == 0 || vectors.is_null() {
+fn try_mark_tty_read(tty: *const u8) -> Result<(), i32> {
+    if fail_closed() || !selected_tty(tty)? {
         return Ok(());
     }
-
-    if count > 0 {
-        capture_vector(metadata, fd as i32, vectors, 0, count)?;
-    }
-    if count > 1 {
-        capture_vector(metadata, fd as i32, vectors, 1, count)?;
-    }
-    if count > 2 {
-        capture_vector(metadata, fd as i32, vectors, 2, count)?;
-    }
-    if count > 3 {
-        capture_vector(metadata, fd as i32, vectors, 3, count)?;
-    }
-    if count > MAX_WRITEV_SEGMENTS as u64 {
-        increment(STAT_TRUNCATED);
-    }
+    let process_group = current_process_group()?;
+    mark_tainted(JobKey {
+        tty: tty as u64,
+        process_group,
+    })?;
+    increment(STAT_READ_MARKED);
     Ok(())
 }
 
-#[derive(Clone, Copy)]
-struct Metadata {
-    timestamp_ns: u64,
-    pid: u32,
-    uid: u32,
-    comm: [u8; 16],
-    syscall: SyscallKind,
+#[fentry(function = "n_tty_write")]
+pub fn observe_tty_write(ctx: FEntryContext) -> u32 {
+    let tty: *const u8 = ctx.arg(0);
+    let buffer: *const u8 = ctx.arg(2);
+    let count: usize = ctx.arg(3);
+    let _ = try_observe_tty_write(tty, buffer, count);
+    0
 }
 
-fn metadata(syscall: SyscallKind) -> Option<Metadata> {
+fn try_observe_tty_write(tty: *const u8, buffer: *const u8, count: usize) -> Result<(), i32> {
     increment(STAT_SEEN);
-    match syscall {
-        SyscallKind::Write => increment(STAT_WRITE),
-        SyscallKind::WriteV => increment(STAT_WRITEV),
+    if fail_closed() || !eligible_process() || !selected_tty(tty)? {
+        return Ok(());
     }
+
+    let process_group = current_process_group()?;
+    let foreground_group = tty_foreground_group(tty)?;
+    if process_group != foreground_group {
+        increment(STAT_BACKGROUND_FILTERED);
+        return Ok(());
+    }
+
+    let key = JobKey {
+        tty: tty as u64,
+        process_group,
+    };
+    if !tty_initialized(tty as u64, key)? {
+        increment(STAT_INITIAL_FILTERED);
+        return Ok(());
+    }
+    if TAINTED_JOBS.get_ptr(&key).is_some() {
+        increment(STAT_TAINT_FILTERED);
+        return Ok(());
+    }
+
+    capture(buffer, count)
+}
+
+fn eligible_process() -> bool {
     let uid = bpf_get_current_uid_gid() as u32;
     if uid != TARGET_UID.load() {
         increment(STAT_UID_FILTERED);
-        return None;
+        return false;
     }
     let pid = (bpf_get_current_pid_tgid() >> 32) as u32;
     if pid == SELF_PID.load() {
         increment(STAT_PROCESS_FILTERED);
-        return None;
+        return false;
     }
-    let comm = bpf_get_current_comm().ok()?;
-    if is_blocked_comm(&comm) {
-        increment(STAT_PROCESS_FILTERED);
-        return None;
-    }
-    Some(Metadata {
-        timestamp_ns: unsafe { bpf_ktime_get_ns() },
-        pid,
-        uid,
-        comm,
-        syscall,
-    })
+    true
 }
 
-fn capture_vector(
-    metadata: Metadata,
-    fd: i32,
-    vectors: *const IoVec,
-    index: usize,
-    count: u64,
-) -> Result<(), i32> {
-    let vector = unsafe { bpf_probe_read_user(vectors.add(index))? };
-    let mut flags = if index == 0 { 0 } else { FLAG_CONTINUATION };
-    if count > MAX_WRITEV_SEGMENTS as u64 {
-        flags |= FLAG_TRUNCATED;
+fn selected_tty(tty: *const u8) -> Result<bool, i32> {
+    if tty.is_null() {
+        structure_failure();
+        return Err(-1);
     }
-    capture(metadata, fd, vector.base, vector.len as u64, flags)
+    let device: u64 = read_kernel(tty, TTY_DEVICE_OFFSET.load())?;
+    if device == 0 {
+        structure_failure();
+        return Err(-1);
+    }
+    let devt: u32 = read_kernel(device as *const u8, DEVICE_DEVT_OFFSET.load())?;
+    if SELECTED_TTYS.get_ptr(&devt).is_none() {
+        increment(STAT_TTY_FILTERED);
+        return Ok(false);
+    }
+    Ok(true)
 }
 
-fn capture(
-    metadata: Metadata,
-    fd: i32,
-    source: *const u8,
-    requested: u64,
-    mut flags: u8,
-) -> Result<(), i32> {
-    if fd < 0 || requested == 0 || source.is_null() {
+fn current_process_group() -> Result<u64, i32> {
+    let task = unsafe { aya_ebpf::helpers::generated::bpf_get_current_task() } as *const u8;
+    let signal: u64 = read_kernel(task, TASK_SIGNAL_OFFSET.load())?;
+    if signal == 0 {
+        structure_failure();
+        return Err(-1);
+    }
+    let process_group: u64 = read_kernel(signal as *const u8, SIGNAL_PGID_OFFSET.load())?;
+    if process_group == 0 {
+        structure_failure();
+        return Err(-1);
+    }
+    Ok(process_group)
+}
+
+fn tty_foreground_group(tty: *const u8) -> Result<u64, i32> {
+    let process_group: u64 = read_kernel(tty, TTY_PGRP_OFFSET.load())?;
+    if process_group == 0 {
+        structure_failure();
+        return Err(-1);
+    }
+    Ok(process_group)
+}
+
+fn read_kernel<T: Copy>(base: *const u8, offset: u32) -> Result<T, i32> {
+    if base.is_null() || offset == u32::MAX {
+        structure_failure();
+        return Err(-1);
+    }
+    match unsafe { bpf_probe_read_kernel(base.add(offset as usize).cast::<T>()) } {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            structure_failure();
+            Err(error)
+        }
+    }
+}
+
+fn tty_initialized(tty: u64, key: JobKey) -> Result<bool, i32> {
+    if INITIALIZED_TTYS.get_ptr(&tty).is_some() {
+        return Ok(true);
+    }
+    if INITIALIZED_TTYS.insert(&tty, &1, 0).is_err() && INITIALIZED_TTYS.get_ptr(&tty).is_none() {
+        map_failure();
+        return Err(-1);
+    }
+    mark_tainted(key)?;
+    Ok(false)
+}
+
+fn mark_tainted(key: JobKey) -> Result<(), i32> {
+    if TAINTED_JOBS.get_ptr(&key).is_some() {
         return Ok(());
     }
-    let captured = if requested > CAPTURE_BYTES as u64 {
+    if TAINTED_JOBS.insert(&key, &1, 0).is_err() && TAINTED_JOBS.get_ptr(&key).is_none() {
+        map_failure();
+        return Err(-1);
+    }
+    Ok(())
+}
+
+fn capture(source: *const u8, requested: usize) -> Result<(), i32> {
+    if requested == 0 || source.is_null() {
+        return Ok(());
+    }
+    let mut flags = 0;
+    let captured = if requested > CAPTURE_BYTES {
         flags |= FLAG_TRUNCATED;
         increment(STAT_TRUNCATED);
         CAPTURE_BYTES
     } else {
-        requested as usize
+        requested
     };
     let Some(mut entry) = EVENTS.reserve::<CaptureEvent>(0) else {
         increment(STAT_RING_DROPPED);
         return Ok(());
     };
     let event = entry.write(CaptureEvent::empty());
-    event.timestamp_ns = metadata.timestamp_ns;
-    event.pid = metadata.pid;
-    event.uid = metadata.uid;
-    event.fd = fd;
-    event.requested_len = requested.min(u32::MAX as u64) as u32;
+    event.timestamp_ns = unsafe { bpf_ktime_get_ns() };
+    event.pid = (bpf_get_current_pid_tgid() >> 32) as u32;
+    event.uid = bpf_get_current_uid_gid() as u32;
+    event.fd = -1;
+    event.requested_len = requested.min(u32::MAX as usize) as u32;
     event.captured_len = captured as u16;
-    event.syscall = metadata.syscall as u8;
+    event.capture_kind = CaptureKind::TtyWrite as u8;
     event.flags = flags;
-    event.comm = metadata.comm;
+    event.comm = bpf_get_current_comm().unwrap_or([0; 16]);
     if unsafe {
         aya_ebpf::helpers::generated::bpf_probe_read_user(
             event.data.as_mut_ptr().cast(),
@@ -192,6 +250,27 @@ fn capture(
     entry.submit(0);
     increment(STAT_EMITTED);
     Ok(())
+}
+
+fn structure_failure() {
+    increment(STAT_STRUCTURE_FAILED);
+    set_fail_closed();
+}
+
+fn map_failure() {
+    increment(STAT_MAP_FAILED);
+    set_fail_closed();
+}
+
+fn fail_closed() -> bool {
+    FAIL_STATE.get(0).is_none_or(|value| *value != 0)
+}
+
+fn set_fail_closed() {
+    if let Some(value) = FAIL_STATE.get_ptr_mut(0) {
+        unsafe { *value = 1 };
+    }
+    increment(STAT_FAIL_CLOSED);
 }
 
 fn increment(index: u32) {

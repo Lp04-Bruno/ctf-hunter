@@ -2,7 +2,7 @@
 
 CTF Hunter is a Linux-first application for passively finding CTF flags in terminal output, watched files, and manually submitted data.
 
-The project is in active development. The current implementation provides a bounded analysis engine, SQLite persistence, an unprivileged per-user daemon with versioned Unix-socket IPC, and inotify-backed file collection. The terminal-capture feasibility prototype is intentionally not approved for integration because syscall observation cannot reliably distinguish program output from text redrawn by unknown interactive applications. UI components will be added incrementally.
+The project is in active development. The current implementation provides a bounded analysis engine, SQLite persistence, an unprivileged per-user daemon with versioned Unix-socket IPC, inotify-backed file collection, and an isolated read-tainted foreground-TTY capture prototype. The capture prototype runs beside ordinary terminals without wrapping commands, but remains disconnected from the daemon until privileged host validation is complete. UI components will be added incrementally.
 
 ## Requirements
 

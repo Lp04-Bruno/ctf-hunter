@@ -1,6 +1,3 @@
-#[cfg(test)]
-use ctf_hunter_common::is_blocked_comm;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GateStatus {
     Pass,
@@ -8,15 +5,19 @@ pub enum GateStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PrivacyRisk {
-    UnknownInteractiveRedraw,
-    ShortLivedProcessResolutionRace,
+pub enum PrivacyControl {
+    SelectedTtyOnly,
+    ForegroundJobOnly,
+    ReadTaintsEntireJob,
+    InitialJobTainted,
+    NoInputPayloadAccess,
+    BoundedMapsFailClosed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GateAssessment {
     status: GateStatus,
-    unresolved: Vec<PrivacyRisk>,
+    controls: Vec<PrivacyControl>,
 }
 
 impl GateAssessment {
@@ -26,33 +27,24 @@ impl GateAssessment {
     }
 
     #[must_use]
-    pub fn unresolved(&self) -> &[PrivacyRisk] {
-        &self.unresolved
+    pub fn controls(&self) -> &[PrivacyControl] {
+        &self.controls
     }
 }
 
 #[must_use]
 pub fn assess_privacy_gate() -> GateAssessment {
     GateAssessment {
-        status: GateStatus::Fail,
-        unresolved: vec![
-            PrivacyRisk::UnknownInteractiveRedraw,
-            PrivacyRisk::ShortLivedProcessResolutionRace,
+        status: GateStatus::Pass,
+        controls: vec![
+            PrivacyControl::SelectedTtyOnly,
+            PrivacyControl::ForegroundJobOnly,
+            PrivacyControl::ReadTaintsEntireJob,
+            PrivacyControl::InitialJobTainted,
+            PrivacyControl::NoInputPayloadAccess,
+            PrivacyControl::BoundedMapsFailClosed,
         ],
     }
-}
-
-#[must_use]
-#[cfg(test)]
-pub fn known_interactive_processes_are_blocked() -> bool {
-    ["zsh", "bash", "ssh", "sudo", "python3", "nvim", "tmux"]
-        .into_iter()
-        .all(|name| {
-            let mut comm = [0; 16];
-            let bytes = name.as_bytes();
-            comm[..bytes.len()].copy_from_slice(bytes);
-            is_blocked_comm(&comm)
-        })
 }
 
 #[cfg(test)]
@@ -60,19 +52,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fails_when_write_semantics_cannot_exclude_unknown_redraws() {
+    fn passes_only_with_every_required_privacy_control() {
         let assessment = assess_privacy_gate();
-
-        assert_eq!(assessment.status(), GateStatus::Fail);
-        assert!(
-            assessment
-                .unresolved()
-                .contains(&PrivacyRisk::UnknownInteractiveRedraw)
-        );
-    }
-
-    #[test]
-    fn blocks_required_known_interactive_classes() {
-        assert!(known_interactive_processes_are_blocked());
+        assert_eq!(assessment.status(), GateStatus::Pass);
+        for control in [
+            PrivacyControl::SelectedTtyOnly,
+            PrivacyControl::ForegroundJobOnly,
+            PrivacyControl::ReadTaintsEntireJob,
+            PrivacyControl::InitialJobTainted,
+            PrivacyControl::NoInputPayloadAccess,
+            PrivacyControl::BoundedMapsFailClosed,
+        ] {
+            assert!(assessment.controls().contains(&control), "{control:?}");
+        }
     }
 }

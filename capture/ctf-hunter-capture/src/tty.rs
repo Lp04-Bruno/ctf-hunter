@@ -1,104 +1,38 @@
 use std::{
-    collections::HashMap,
-    io,
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
+    fs, io,
+    os::unix::{fs::FileTypeExt as _, fs::MetadataExt as _},
+    path::Path,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FdClassification {
-    Terminal(PathBuf),
-    NonTerminal,
-    Unavailable,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct FdKey {
-    pid: u32,
-    fd: i32,
-}
-
-#[derive(Clone, Debug)]
-struct CachedFd {
-    classification: FdClassification,
-    observed_at: Instant,
-}
-
-#[derive(Debug)]
-pub struct TtyFdCache {
-    entries: HashMap<FdKey, CachedFd>,
-    capacity: usize,
-    ttl: Duration,
-}
-
-impl TtyFdCache {
-    #[must_use]
-    pub fn new(capacity: usize, ttl: Duration) -> Self {
-        Self {
-            entries: HashMap::with_capacity(capacity),
-            capacity,
-            ttl,
-        }
+pub fn terminal_device_key(path: &Path) -> io::Result<u32> {
+    let canonical = fs::canonicalize(path)?;
+    if !is_terminal_path(&canonical) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a supported terminal path", path.display()),
+        ));
     }
-
-    pub fn classify(&mut self, pid: u32, fd: i32) -> io::Result<FdClassification> {
-        let key = FdKey { pid, fd };
-        let now = Instant::now();
-        if let Some(cached) = self.entries.get(&key)
-            && now.duration_since(cached.observed_at) <= self.ttl
-        {
-            return Ok(cached.classification.clone());
-        }
-
-        let link = PathBuf::from(format!("/proc/{pid}/fd/{fd}"));
-        let classification = match std::fs::read_link(link) {
-            Ok(path) if is_terminal_path(&path) => FdClassification::Terminal(path),
-            Ok(_) => FdClassification::NonTerminal,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
-                ) =>
-            {
-                FdClassification::Unavailable
-            }
-            Err(error) => return Err(error),
-        };
-        if self.capacity > 0 {
-            self.remove_expired_or_oldest(now);
-            self.entries.insert(
-                key,
-                CachedFd {
-                    classification: classification.clone(),
-                    observed_at: now,
-                },
-            );
-        }
-        Ok(classification)
+    let metadata = fs::metadata(&canonical)?;
+    if !metadata.file_type().is_char_device() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a character device", path.display()),
+        ));
     }
-
-    fn remove_expired_or_oldest(&mut self, now: Instant) {
-        self.entries
-            .retain(|_, value| now.duration_since(value.observed_at) <= self.ttl);
-        if self.entries.len() < self.capacity {
-            return;
-        }
-        if let Some(oldest) = self
-            .entries
-            .iter()
-            .min_by_key(|(_, value)| value.observed_at)
-            .map(|(key, _)| *key)
-        {
-            self.entries.remove(&oldest);
-        }
+    let device = metadata.rdev();
+    let major = ((device & 0x0000_0000_000f_ff00) >> 8) | ((device & 0xffff_f000_0000_0000) >> 32);
+    let minor = (device & 0xff) | ((device & 0x0000_0fff_fff0_0000) >> 12);
+    if major >= (1 << 12) || minor >= (1 << 20) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} has an unsupported device identifier", path.display()),
+        ));
     }
+    Ok(((major as u32) << 20) | minor as u32)
 }
 
 #[must_use]
 pub fn is_terminal_path(path: &Path) -> bool {
-    if path == Path::new("/dev/tty") || path == Path::new("/dev/console") {
-        return true;
-    }
     let Some(value) = path.to_str() else {
         return false;
     };
@@ -114,20 +48,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recognizes_only_terminal_device_paths() {
-        for path in ["/dev/pts/0", "/dev/tty", "/dev/tty2", "/dev/console"] {
+    fn recognizes_only_supported_terminal_paths() {
+        for path in ["/dev/pts/0", "/dev/tty2"] {
             assert!(is_terminal_path(Path::new(path)), "{path}");
         }
-        for path in ["/tmp/output", "/dev/null", "/dev/pts/x", "/dev/ttyUSB0"] {
+        for path in [
+            "/tmp/output",
+            "/dev/null",
+            "/dev/pts/x",
+            "/dev/tty",
+            "/dev/console",
+            "/dev/ttyUSB0",
+        ] {
             assert!(!is_terminal_path(Path::new(path)), "{path}");
         }
     }
 
     #[test]
-    fn bounds_cache_capacity() {
-        let mut cache = TtyFdCache::new(1, Duration::from_secs(1));
-        let _ = cache.classify(u32::MAX, 1).expect("classification");
-        let _ = cache.classify(u32::MAX - 1, 1).expect("classification");
-        assert!(cache.entries.len() <= 1);
+    fn rejects_non_terminal_devices() {
+        let error = terminal_device_key(Path::new("/dev/null")).expect_err("not a terminal");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 }
