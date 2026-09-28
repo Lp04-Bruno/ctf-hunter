@@ -1,10 +1,12 @@
 mod gate;
-mod tracepoint;
+mod kernel_layout;
+mod policy;
 mod tty;
 
-pub use gate::{GateAssessment, GateStatus, PrivacyRisk, assess_privacy_gate};
-pub use tracepoint::{ExpectedField, TracepointField, verify_tracepoint_format};
-pub use tty::{FdClassification, TtyFdCache, is_terminal_path};
+pub use gate::{GateAssessment, GateStatus, PrivacyControl, assess_privacy_gate};
+pub use kernel_layout::KernelLayout;
+pub use policy::{PolicyDecision, PrivacyPolicy};
+pub use tty::{is_terminal_path, terminal_device_key};
 
 #[must_use]
 pub fn process_name(comm: &[u8; 16]) -> &str {
@@ -28,6 +30,8 @@ pub fn escaped_payload(payload: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    const EBPF_SOURCE: &str = include_str!("../../ctf-hunter-ebpf/src/main.rs");
+
     #[test]
     fn escapes_control_and_non_ascii_bytes() {
         assert_eq!(escaped_payload(b"ok\n\xff"), "ok\\n\\xff");
@@ -38,5 +42,28 @@ mod tests {
         let mut comm = [0; 16];
         comm[..4].copy_from_slice(b"curl");
         assert_eq!(process_name(&comm), "curl");
+    }
+
+    #[test]
+    fn tty_read_hook_never_accesses_input_arguments_or_payload_helpers() {
+        let read_hook = EBPF_SOURCE
+            .split("#[fentry(function = \"n_tty_read\")]")
+            .nth(1)
+            .and_then(|tail| tail.split("#[fentry(function = \"n_tty_write\")]").next())
+            .expect("read hook source");
+
+        assert!(read_hook.contains("ctx.arg(0)"));
+        for forbidden in [
+            "ctx.arg(1)",
+            "ctx.arg(2)",
+            "ctx.arg(3)",
+            "ctx.arg(4)",
+            "ctx.arg(5)",
+            "bpf_probe_read_user",
+            "CaptureEvent",
+            "EVENTS.reserve",
+        ] {
+            assert!(!read_hook.contains(forbidden), "found {forbidden}");
+        }
     }
 }
