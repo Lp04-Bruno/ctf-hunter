@@ -1,11 +1,15 @@
 mod gate;
 mod kernel_layout;
 mod policy;
+mod runtime;
+mod service;
 mod tty;
 
 pub use gate::{GateAssessment, GateStatus, PrivacyControl, assess_privacy_gate};
 pub use kernel_layout::KernelLayout;
 pub use policy::{PolicyDecision, PrivacyPolicy};
+pub use runtime::{CaptureConfig, CaptureRuntime, CaptureStatistics};
+pub use service::{CaptureServiceConfig, serve};
 pub use tty::{is_terminal_path, terminal_device_key};
 
 #[must_use]
@@ -31,6 +35,9 @@ mod tests {
     use super::*;
 
     const EBPF_SOURCE: &str = include_str!("../../ctf-hunter-ebpf/src/main.rs");
+    const HELPER_MANIFEST: &str = include_str!("../Cargo.toml");
+    const HELPER_UNIT: &str = include_str!("../../../packaging/systemd/ctf-hunter-capture.service");
+    const DAEMON_UNIT: &str = include_str!("../../../packaging/systemd/ctf-hunterd.service");
 
     #[test]
     fn escapes_control_and_non_ascii_bytes() {
@@ -76,5 +83,40 @@ mod tests {
     fn tty_output_uses_the_kernel_write_buffer() {
         assert!(!EBPF_SOURCE.contains("bpf_probe_read_user"));
         assert!(EBPF_SOURCE.contains("bpf_probe_read_kernel"));
+    }
+
+    #[test]
+    fn privileged_helper_keeps_analysis_and_storage_out_of_process() {
+        for forbidden in [
+            "hunter-core",
+            "hunter-database",
+            "hunter-decoder",
+            "hunter-parser",
+            "rusqlite",
+        ] {
+            assert!(!HELPER_MANIFEST.contains(forbidden), "found {forbidden}");
+        }
+    }
+
+    #[test]
+    fn service_units_preserve_the_privilege_boundary() {
+        for required in [
+            "User=root",
+            "Group=ctf-hunter",
+            "AmbientCapabilities=CAP_BPF CAP_PERFMON",
+            "CapabilityBoundingSet=CAP_BPF CAP_PERFMON",
+            "NoNewPrivileges=yes",
+            "RestrictAddressFamilies=AF_UNIX",
+            "SystemCallFilter=@system-service bpf",
+        ] {
+            assert!(HELPER_UNIT.contains(required), "missing {required}");
+        }
+        for forbidden in ["CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_PTRACE"] {
+            assert!(!HELPER_UNIT.contains(forbidden), "found {forbidden}");
+        }
+        assert!(!DAEMON_UNIT.contains("User=root"));
+        assert!(!DAEMON_UNIT.contains("AmbientCapabilities="));
+        assert!(!DAEMON_UNIT.contains("CapabilityBoundingSet="));
+        assert!(DAEMON_UNIT.contains("NoNewPrivileges=yes"));
     }
 }

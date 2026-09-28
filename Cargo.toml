@@ -5,6 +5,8 @@ members = [
     "capture/ctf-hunter-ebpf",
     "crates/hunter-core",
     "crates/hunter-collectors",
+    "crates/hunter-capture-protocol",
+    "crates/hunter-capture-client",
     "crates/hunter-decoder",
     "crates/hunter-database",
     "crates/hunter-flags",

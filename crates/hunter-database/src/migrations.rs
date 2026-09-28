@@ -5,6 +5,7 @@ use crate::{DatabaseError, Result};
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_file_watches.sql"),
+    include_str!("../migrations/0003_terminal_sources.sql"),
 ];
 
 pub fn apply(connection: &mut Connection) -> Result<()> {

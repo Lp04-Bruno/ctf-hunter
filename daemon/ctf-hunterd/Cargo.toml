@@ -8,6 +8,8 @@ publish = false
 [dependencies]
 hunter-core = { path = "../../crates/hunter-core" }
 hunter-collectors = { path = "../../crates/hunter-collectors" }
+hunter-capture-protocol = { path = "../../crates/hunter-capture-protocol" }
+hunter-capture-client = { path = "../../crates/hunter-capture-client" }
 hunter-database = { path = "../../crates/hunter-database" }
 hunter-flags = { path = "../../crates/hunter-flags" }
 hunter-ipc = { path = "../../crates/hunter-ipc" }

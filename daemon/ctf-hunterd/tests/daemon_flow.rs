@@ -1,18 +1,26 @@
 use std::{
     fs,
     io::Write as _,
-    os::unix::{fs::PermissionsExt as _, net::UnixStream},
+    os::unix::{
+        fs::PermissionsExt as _,
+        net::{UnixListener, UnixStream},
+    },
     sync::{Arc, Barrier, atomic::AtomicBool},
     thread,
     time::{Duration, Instant},
 };
 
 use ctf_hunterd::{DaemonConfig, run};
+use hunter_capture_client::CaptureClientConfig;
+use hunter_capture_protocol::{
+    CaptureHealth, CapturedOutput, ClientMessage, ServerMessage, read_client, write_server,
+};
+use hunter_database::Database;
 use hunter_ipc::{
     ErrorCode, IpcClient, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request, RequestEnvelope, Response,
     ResponseEnvelope, read_frame,
 };
-use hunter_types::SourceMetadata;
+use hunter_types::{Session, SessionId, SourceMetadata, Timestamp};
 use tempfile::tempdir;
 
 fn start(config: DaemonConfig) -> thread::JoinHandle<Result<(), ctf_hunterd::DaemonError>> {
@@ -174,7 +182,7 @@ fn analyzes_queries_and_recovers_findings_after_restart() {
     }
     match request(&config, 6, Request::GetStatus) {
         Response::Status(status) => {
-            assert_eq!(status.schema_version, 2);
+            assert_eq!(status.schema_version, 3);
             assert_eq!(status.worker_count, 4);
             assert_eq!(status.queue_capacity, 64);
             assert!(status.completed_requests >= 3);
@@ -390,6 +398,134 @@ fn activates_a_watch_added_to_a_restored_monitoring_session() {
     fs::write(watched.join("late.bin"), b"FLAG{late_watch}").expect("watched file");
     wait_for_findings(&config, session.id(), 1);
     shutdown(&config, restarted);
+}
+
+#[test]
+fn analyzes_capture_events_from_the_privileged_helper_channel() {
+    let directory = tempdir().expect("tempdir");
+    let capture_socket = directory.path().join("capture.sock");
+    let listener = UnixListener::bind(&capture_socket).expect("capture listener");
+    let helper = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("capture connection");
+        assert!(matches!(
+            read_client(&mut stream).expect("capture start"),
+            ClientMessage::Start { terminal } if terminal == "/dev/pts/7"
+        ));
+        write_server(&mut stream, &ServerMessage::Ready).expect("ready");
+        write_server(
+            &mut stream,
+            &ServerMessage::Event(CapturedOutput {
+                pid: 4242,
+                uid: nix::unistd::geteuid().as_raw(),
+                requested_len: 24,
+                truncated: false,
+                process_name: "challenge".to_owned(),
+                payload: b"RkxBR3t0ZXJtaW5hbF9pcGN9".to_vec(),
+            }),
+        )
+        .expect("event");
+        write_server(
+            &mut stream,
+            &ServerMessage::Health(CaptureHealth::default()),
+        )
+        .expect("health");
+        assert_eq!(read_client(&mut stream).expect("stop"), ClientMessage::Stop);
+    });
+
+    let database_path = directory.path().join("data/hunter.db");
+    fs::create_dir_all(database_path.parent().expect("database parent"))
+        .expect("database directory");
+    let session_id = SessionId::generate();
+    let mut session = Session::new(session_id, "Terminal IPC", Timestamp::now()).expect("session");
+    session
+        .set_flag_patterns(vec!["FLAG{*}".to_owned()])
+        .expect("patterns");
+    session.start(Timestamp::now()).expect("start");
+    {
+        let mut database = Database::open(&database_path).expect("database");
+        database.save_session(&session).expect("save session");
+        database
+            .add_terminal(session_id, std::path::Path::new("/dev/pts/7"))
+            .expect("terminal registration");
+    }
+
+    let mut config =
+        DaemonConfig::new(&database_path, directory.path().join("runtime/daemon.sock"));
+    config.capture_client = CaptureClientConfig::new(&capture_socket);
+    config.capture_client.expected_helper_uid = nix::unistd::geteuid().as_raw();
+    let daemon = start(config.clone());
+    wait_for_findings(&config, session_id, 1);
+
+    let findings = match request(
+        &config,
+        901,
+        Request::ListFindings {
+            session_id,
+            offset: 0,
+            limit: 10,
+        },
+    ) {
+        Response::Findings { findings } => findings,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(findings[0].value, "FLAG{terminal_ipc}");
+    match request(
+        &config,
+        902,
+        Request::GetFinding {
+            finding_id: findings[0].id,
+        },
+    ) {
+        Response::Finding {
+            finding: Some(detail),
+        } => match &detail.occurrences[0].source {
+            SourceMetadata::Terminal(source) => {
+                assert_eq!(source.process_id(), 4242);
+                assert_eq!(source.process_name(), "challenge");
+                assert_eq!(source.file_descriptor(), None);
+                assert_eq!(source.tty(), std::path::Path::new("/dev/pts/7"));
+            }
+            other => panic!("unexpected source: {other:?}"),
+        },
+        other => panic!("unexpected response: {other:?}"),
+    }
+    match request(&config, 903, Request::GetStatus) {
+        Response::Status(status) => {
+            assert_eq!(status.capture.configured_sources, 1);
+            assert_eq!(status.capture.active_sources, 1);
+            assert_eq!(status.capture.events_received, 1);
+            assert_eq!(status.capture.events_analyzed, 1);
+            assert_eq!(status.capture.analysis_errors, 0);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+    assert_eq!(
+        request(&config, 904, Request::ListTerminals { session_id },),
+        Response::Terminals {
+            session_id,
+            terminals: vec!["/dev/pts/7".to_owned()],
+        }
+    );
+    assert!(matches!(
+        request(&config, 905, Request::PauseSession { session_id }),
+        Response::Session(_)
+    ));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match request(&config, 906, Request::GetStatus) {
+            Response::Status(status)
+                if status.capture.active_sources == 0 && status.capture.connected_sources == 0 =>
+            {
+                break;
+            }
+            Response::Status(_) => {}
+            other => panic!("unexpected response: {other:?}"),
+        }
+        assert!(Instant::now() < deadline, "capture source did not stop");
+        thread::sleep(Duration::from_millis(10));
+    }
+    helper.join().expect("helper");
+    shutdown(&config, daemon);
 }
 
 #[test]

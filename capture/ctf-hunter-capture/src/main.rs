@@ -1,27 +1,24 @@
 use std::{
-    collections::BTreeSet,
     io::{self, Write as _},
     path::{Path, PathBuf},
+    sync::{Arc, atomic::AtomicBool},
     thread,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result, bail};
-use aya::{
-    Btf, EbpfLoader,
-    maps::{Array, HashMap, PerCpuArray, RingBuf},
-    programs::FEntry,
-};
+use aya::Btf;
 use ctf_hunter_capture::{
-    GateStatus, KernelLayout, assess_privacy_gate, escaped_payload, process_name,
-    terminal_device_key,
+    CaptureConfig, CaptureRuntime, CaptureServiceConfig, GateStatus, KernelLayout,
+    assess_privacy_gate, escaped_payload, process_name, serve,
 };
 use ctf_hunter_common::{
-    CaptureEvent, FailureReason, MAX_SELECTED_TTYS, STAT_BACKGROUND_FILTERED, STAT_COUNT,
-    STAT_EMITTED, STAT_FAIL_CLOSED, STAT_INITIAL_FILTERED, STAT_MAP_FAILED, STAT_PROCESS_FILTERED,
-    STAT_READ_FAILED, STAT_READ_MARKED, STAT_RING_DROPPED, STAT_SEEN, STAT_STRUCTURE_FAILED,
-    STAT_TAINT_FILTERED, STAT_TRUNCATED, STAT_TTY_FILTERED, STAT_UID_FILTERED,
+    FailureReason, MAX_SELECTED_TTYS, STAT_BACKGROUND_FILTERED, STAT_EMITTED, STAT_FAIL_CLOSED,
+    STAT_INITIAL_FILTERED, STAT_MAP_FAILED, STAT_PROCESS_FILTERED, STAT_READ_FAILED,
+    STAT_READ_MARKED, STAT_RING_DROPPED, STAT_SEEN, STAT_STRUCTURE_FAILED, STAT_TAINT_FILTERED,
+    STAT_TRUNCATED, STAT_TTY_FILTERED, STAT_UID_FILTERED,
 };
+use signal_hook::consts::signal::{SIGINT, SIGTERM};
 
 const KERNEL_BTF: &str = "/sys/kernel/btf/vmlinux";
 
@@ -30,6 +27,12 @@ fn main() -> Result<()> {
         Command::Preflight => preflight().map(|_| ()),
         Command::Gate => print_gate(),
         Command::Run(options) => run(options),
+        Command::Serve(config) => {
+            let terminating = Arc::new(AtomicBool::new(false));
+            signal_hook::flag::register(SIGINT, Arc::clone(&terminating))?;
+            signal_hook::flag::register(SIGTERM, Arc::clone(&terminating))?;
+            serve(config, terminating)
+        }
     }
 }
 
@@ -46,6 +49,7 @@ enum Command {
     Preflight,
     Gate,
     Run(RunOptions),
+    Serve(CaptureServiceConfig),
 }
 
 fn parse_args() -> Result<Command> {
@@ -100,8 +104,35 @@ fn parse_args() -> Result<Command> {
                 show_payload,
             }))
         }
+        Some("serve") => {
+            let mut socket = None;
+            let mut max_connections = None;
+            while let Some(argument) = args.next() {
+                match argument.as_str() {
+                    "--socket" => {
+                        socket = Some(PathBuf::from(
+                            args.next().context("--socket requires a value")?,
+                        ));
+                    }
+                    "--max-connections" => {
+                        max_connections = Some(
+                            args.next()
+                                .context("--max-connections requires a value")?
+                                .parse()
+                                .context("invalid maximum connection count")?,
+                        );
+                    }
+                    _ => bail!("unknown argument: {argument}"),
+                }
+            }
+            let mut config = CaptureServiceConfig::new(socket.context("serve requires --socket")?);
+            if let Some(max_connections) = max_connections {
+                config.max_connections = max_connections;
+            }
+            Ok(Command::Serve(config))
+        }
         _ => bail!(
-            "usage: ctf-hunter-capture <preflight|gate|run --uid UID --tty PATH [--tty PATH ...] [--duration-seconds N] [--show-payload]>"
+            "usage: ctf-hunter-capture <preflight|gate|run --uid UID --tty PATH [--tty PATH ...] [--duration-seconds N] [--show-payload]|serve --socket PATH [--max-connections N]>"
         ),
     }
 }
@@ -138,68 +169,17 @@ fn print_gate() -> Result<()> {
 }
 
 fn run(options: RunOptions) -> Result<()> {
-    if assess_privacy_gate().status() != GateStatus::Pass {
-        bail!("privacy gate failed");
-    }
-    let layout = preflight()?;
-    let devices = selected_devices(&options.terminals)?;
-    let kernel_btf = Btf::from_sys_fs().context("load kernel BTF")?;
-    let self_pid = std::process::id();
-    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/ctf-hunter-ebpf"));
-    let mut ebpf = EbpfLoader::new()
-        .override_global("TARGET_UID", &options.uid, true)
-        .override_global("SELF_PID", &self_pid, true)
-        .override_global("TASK_SIGNAL_OFFSET", &layout.task_signal, true)
-        .override_global("SIGNAL_PGID_OFFSET", &layout.signal_pgid, true)
-        .override_global("TTY_PGRP_OFFSET", &layout.tty_pgrp, true)
-        .override_global("TTY_INDEX_OFFSET", &layout.tty_index, true)
-        .override_global("TTY_DRIVER_OFFSET", &layout.tty_driver, true)
-        .override_global("DRIVER_MAJOR_OFFSET", &layout.driver_major, true)
-        .override_global(
-            "DRIVER_MINOR_START_OFFSET",
-            &layout.driver_minor_start,
-            true,
-        )
-        .load(bytes)
-        .context("load eBPF object")?;
-
-    {
-        let map = ebpf
-            .map_mut("SELECTED_TTYS")
-            .context("SELECTED_TTYS map missing")?;
-        let mut selected: HashMap<_, u32, u8> =
-            HashMap::try_from(map).context("open SELECTED_TTYS map")?;
-        for device in &devices {
-            selected
-                .insert(*device, 1, 0)
-                .with_context(|| format!("select terminal device {device}"))?;
-        }
-    }
-
-    attach(&mut ebpf, "mark_tty_read", "n_tty_read", &kernel_btf)?;
-    attach(&mut ebpf, "observe_tty_write", "n_tty_write", &kernel_btf)?;
-
-    let events = ebpf.take_map("EVENTS").context("EVENTS map missing")?;
-    let stats = ebpf.take_map("STATS").context("STATS map missing")?;
-    let fail_state = ebpf
-        .take_map("FAIL_STATE")
-        .context("FAIL_STATE map missing")?;
-    let mut ring = RingBuf::try_from(events).context("open EVENTS ring buffer")?;
-    let stats: PerCpuArray<_, u64> = PerCpuArray::try_from(stats).context("open STATS map")?;
-    let fail_state: Array<_, u32> = Array::try_from(fail_state).context("open FAIL_STATE map")?;
+    preflight()?;
+    let mut runtime = CaptureRuntime::load(&CaptureConfig {
+        uid: options.uid,
+        terminals: options.terminals,
+    })?;
     println!("capture ready");
     io::stdout().flush().context("flush readiness signal")?;
     let deadline = Instant::now() + options.duration;
-    let mut accepted = 0_u64;
 
     while Instant::now() < deadline {
-        let mut drained = false;
-        while let Some(item) = ring.next() {
-            drained = true;
-            let Some(event) = CaptureEvent::from_wire(&item) else {
-                continue;
-            };
-            accepted += 1;
+        let drained = runtime.drain(|event| {
             if options.show_payload {
                 println!(
                     "pid={} comm={} data={}",
@@ -208,16 +188,18 @@ fn run(options: RunOptions) -> Result<()> {
                     escaped_payload(event.payload())
                 );
             }
-        }
-        if !drained {
+            Ok::<_, std::convert::Infallible>(())
+        });
+        if drained.expect("infallible event consumer") == 0 {
             thread::sleep(Duration::from_millis(1));
         }
     }
 
-    let counters = read_counters(&stats)?;
-    let failure_reason = fail_state.get(&0, 0)?;
+    let statistics = runtime.statistics()?;
+    let counters = statistics.counters;
     println!(
-        "summary accepted={accepted} seen={} emitted={} read_marked={} taint_filtered={} initial_filtered={} background_filtered={} tty_filtered={} uid_filtered={} process_filtered={} structure_failed={} map_failed={} fail_closed={} failure_reason={} ring_dropped={} read_failed={} truncated={}",
+        "summary accepted={} seen={} emitted={} read_marked={} taint_filtered={} initial_filtered={} background_filtered={} tty_filtered={} uid_filtered={} process_filtered={} structure_failed={} map_failed={} fail_closed={} failure_reason={} ring_dropped={} read_failed={} truncated={}",
+        statistics.accepted,
         counters[STAT_SEEN as usize],
         counters[STAT_EMITTED as usize],
         counters[STAT_READ_MARKED as usize],
@@ -230,7 +212,7 @@ fn run(options: RunOptions) -> Result<()> {
         counters[STAT_STRUCTURE_FAILED as usize],
         counters[STAT_MAP_FAILED as usize],
         counters[STAT_FAIL_CLOSED as usize],
-        failure_reason_name(failure_reason),
+        failure_reason_name(statistics.failure_reason),
         counters[STAT_RING_DROPPED as usize],
         counters[STAT_READ_FAILED as usize],
         counters[STAT_TRUNCATED as usize],
@@ -251,33 +233,4 @@ fn failure_reason_name(value: u32) -> &'static str {
         Some(FailureReason::MapMutation) => "map_mutation",
         None => "unknown",
     }
-}
-
-fn selected_devices(paths: &[PathBuf]) -> Result<BTreeSet<u32>> {
-    let mut devices = BTreeSet::new();
-    for path in paths {
-        let device = terminal_device_key(path)
-            .with_context(|| format!("inspect terminal {}", path.display()))?;
-        devices.insert(device);
-    }
-    Ok(devices)
-}
-
-fn attach(ebpf: &mut aya::Ebpf, program_name: &str, function: &str, btf: &Btf) -> Result<()> {
-    let program: &mut FEntry = ebpf
-        .program_mut(program_name)
-        .with_context(|| format!("program {program_name} missing"))?
-        .try_into()?;
-    program.load(function, btf)?;
-    program.attach()?;
-    Ok(())
-}
-
-fn read_counters(stats: &PerCpuArray<aya::maps::MapData, u64>) -> Result<Vec<u64>> {
-    let mut output = Vec::with_capacity(STAT_COUNT as usize);
-    for index in 0..STAT_COUNT {
-        let values = stats.get(&index, 0)?;
-        output.push(values.iter().copied().sum());
-    }
-    Ok(output)
 }

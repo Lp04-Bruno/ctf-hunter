@@ -75,7 +75,7 @@ impl From<SourcePath> for PathBuf {
 pub struct TerminalSource {
     process_id: u32,
     user_id: u32,
-    file_descriptor: u32,
+    file_descriptor: Option<u32>,
     process_name: ProcessName,
     executable: Option<SourcePath>,
     tty: SourcePath,
@@ -85,7 +85,7 @@ impl TerminalSource {
     pub fn new(
         process_id: u32,
         user_id: u32,
-        file_descriptor: u32,
+        file_descriptor: Option<u32>,
         process_name: impl Into<String>,
         executable: Option<SourcePath>,
         tty: SourcePath,
@@ -113,7 +113,7 @@ impl TerminalSource {
     }
 
     #[must_use]
-    pub const fn file_descriptor(&self) -> u32 {
+    pub const fn file_descriptor(&self) -> Option<u32> {
         self.file_descriptor
     }
 
@@ -167,7 +167,7 @@ mod tests {
             TerminalSource::new(
                 42,
                 1000,
-                1,
+                Some(1),
                 "curl",
                 Some(SourcePath::new("/usr/bin/curl").expect("valid path")),
                 SourcePath::new("/dev/pts/3").expect("valid path"),

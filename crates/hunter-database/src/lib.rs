@@ -85,6 +85,13 @@ pub struct WatchDirectory {
     pub active: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalRegistration {
+    pub session_id: SessionId,
+    pub terminal: PathBuf,
+    pub active: bool,
+}
+
 pub struct Database {
     connection: Connection,
 }
@@ -252,6 +259,75 @@ impl Database {
                 Ok(WatchDirectory {
                     session_id: parse_id(&session_id, "session id")?,
                     directory: PathBuf::from(directory),
+                    active: status == "monitoring",
+                })
+            })
+            .collect()
+    }
+
+    pub fn add_terminal(&self, session_id: SessionId, terminal: &Path) -> Result<bool> {
+        let terminal = terminal
+            .to_str()
+            .ok_or(DatabaseError::Invariant("terminal path is not valid UTF-8"))?;
+        Ok(self.connection.execute(
+            "INSERT OR IGNORE INTO session_terminal_sources(session_id, terminal, created_at)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![session_id.to_string(), terminal],
+        )? == 1)
+    }
+
+    pub fn remove_terminal(&self, session_id: SessionId, terminal: &Path) -> Result<bool> {
+        let terminal = terminal
+            .to_str()
+            .ok_or(DatabaseError::Invariant("terminal path is not valid UTF-8"))?;
+        Ok(self.connection.execute(
+            "DELETE FROM session_terminal_sources WHERE session_id = ?1 AND terminal = ?2",
+            params![session_id.to_string(), terminal],
+        )? == 1)
+    }
+
+    pub fn list_terminals(&self, session_id: SessionId) -> Result<Vec<PathBuf>> {
+        let mut statement = self.connection.prepare(
+            "SELECT terminal FROM session_terminal_sources
+             WHERE session_id = ?1 ORDER BY terminal",
+        )?;
+        Ok(statement
+            .query_map([session_id.to_string()], |row| {
+                row.get::<_, String>(0).map(PathBuf::from)
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn all_terminals(&self) -> Result<Vec<TerminalRegistration>> {
+        let mut statement = self.connection.prepare(
+            "SELECT t.session_id, t.terminal, s.status
+             FROM session_terminal_sources t
+             JOIN sessions s ON s.id = t.session_id
+             ORDER BY t.terminal, t.session_id",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(session_id, terminal, status)| {
+                if !matches!(
+                    status.as_str(),
+                    "inactive" | "monitoring" | "paused" | "finished"
+                ) {
+                    return Err(DatabaseError::Corrupt {
+                        field: "session status",
+                        value: status,
+                    });
+                }
+                Ok(TerminalRegistration {
+                    session_id: parse_id(&session_id, "session id")?,
+                    terminal: PathBuf::from(terminal),
                     active: status == "monitoring",
                 })
             })
@@ -741,7 +817,7 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let database = Database::open(directory.path().join("hunter.db")).expect("database");
 
-        assert_eq!(database.schema_version().expect("version"), 2);
+        assert_eq!(database.schema_version().expect("version"), 3);
         assert_eq!(database.journal_mode().expect("journal"), "wal");
         let columns = database
             .connection
@@ -882,6 +958,57 @@ mod tests {
     }
 
     #[test]
+    fn terminal_sources_survive_restart_and_follow_session_state() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("hunter.db");
+        let terminal = PathBuf::from("/dev/pts/7");
+        let mut session = session();
+        session.pause().expect("pause");
+
+        {
+            let mut database = Database::open(&path).expect("database");
+            database.save_session(&session).expect("save session");
+            assert!(
+                database
+                    .add_terminal(session.id(), &terminal)
+                    .expect("add terminal")
+            );
+            assert!(
+                !database
+                    .add_terminal(session.id(), &terminal)
+                    .expect("deduplicate terminal")
+            );
+        }
+
+        let database = Database::open(&path).expect("reopen");
+        assert_eq!(
+            database
+                .list_terminals(session.id())
+                .expect("list terminals"),
+            vec![terminal.clone()]
+        );
+        assert_eq!(
+            database.all_terminals().expect("all terminals"),
+            vec![TerminalRegistration {
+                session_id: session.id(),
+                terminal: terminal.clone(),
+                active: false,
+            }]
+        );
+        assert!(
+            database
+                .remove_terminal(session.id(), &terminal)
+                .expect("remove terminal")
+        );
+        assert!(
+            database
+                .list_terminals(session.id())
+                .expect("empty terminals")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn rejects_a_schema_newer_than_the_binary() {
         let directory = tempdir().expect("tempdir");
         let path = directory.path().join("hunter.db");
@@ -889,7 +1016,7 @@ mod tests {
         database
             .connection
             .execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (3, 'now')",
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (4, 'now')",
                 [],
             )
             .expect("future migration");
@@ -898,8 +1025,8 @@ mod tests {
         assert!(matches!(
             Database::open(&path),
             Err(DatabaseError::UnsupportedSchema {
-                found: 3,
-                supported: 2
+                found: 4,
+                supported: 3
             })
         ));
     }

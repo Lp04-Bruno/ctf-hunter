@@ -14,6 +14,10 @@ use std::{
     time::Duration,
 };
 
+use hunter_capture_client::{
+    CaptureClient, CaptureClientConfig, CaptureClientMetrics, CaptureClientStatistics,
+    CaptureControlError, CaptureRegistration, CollectedTerminalOutput,
+};
 use hunter_collectors::{
     CollectedFile, CollectorControlError, FileCollector, FileCollectorConfig, FileCollectorMetrics,
     FileCollectorStatistics, WatchRegistration,
@@ -22,13 +26,13 @@ use hunter_core::{AnalysisConfig, Analyzer};
 use hunter_database::Database;
 use hunter_flags::FlagPattern;
 use hunter_ipc::{
-    DaemonStatus, ErrorCode, FileCollectorStatus, FindingDetail, FindingOccurrence, FindingSummary,
-    FrameError, IO_TIMEOUT, MAX_LIST_LIMIT, PROTOCOL_VERSION, Request, RequestEnvelope, Response,
-    ResponseEnvelope, TransformationStep, read_frame, write_frame,
+    CaptureStatus, DaemonStatus, ErrorCode, FileCollectorStatus, FindingDetail, FindingOccurrence,
+    FindingSummary, FrameError, IO_TIMEOUT, MAX_LIST_LIMIT, PROTOCOL_VERSION, Request,
+    RequestEnvelope, Response, ResponseEnvelope, TransformationStep, read_frame, write_frame,
 };
 use hunter_types::{
     CaptureEvent, EventId, EventPayload, FileSource, Session, SessionId, SessionStatus,
-    SourceMetadata, SourcePath, Timestamp,
+    SourceMetadata, SourcePath, TerminalSource, Timestamp,
 };
 use nix::{
     sys::socket::{getsockopt, sockopt::PeerCredentials},
@@ -40,6 +44,7 @@ use thiserror::Error;
 pub const DEFAULT_QUEUE_CAPACITY: usize = 64;
 pub const DEFAULT_WORKER_COUNT: usize = 4;
 pub const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+pub const DEFAULT_CAPTURE_SOCKET: &str = "/run/ctf-hunter/capture.sock";
 
 #[derive(Clone, Debug)]
 pub struct DaemonConfig {
@@ -48,6 +53,7 @@ pub struct DaemonConfig {
     pub queue_capacity: usize,
     pub worker_count: usize,
     pub file_collector: FileCollectorConfig,
+    pub capture_client: CaptureClientConfig,
 }
 
 impl DaemonConfig {
@@ -59,6 +65,7 @@ impl DaemonConfig {
             queue_capacity: DEFAULT_QUEUE_CAPACITY,
             worker_count: DEFAULT_WORKER_COUNT,
             file_collector: FileCollectorConfig::default(),
+            capture_client: CaptureClientConfig::new(DEFAULT_CAPTURE_SOCKET),
         }
     }
 }
@@ -71,6 +78,8 @@ pub enum DaemonError {
     Database(#[from] hunter_database::DatabaseError),
     #[error(transparent)]
     FileCollector(#[from] hunter_collectors::FileCollectorError),
+    #[error(transparent)]
+    CaptureClient(#[from] hunter_capture_client::CaptureClientError),
     #[error("queue capacity must be greater than zero")]
     InvalidQueueCapacity,
     #[error("worker count must be greater than zero")]
@@ -96,6 +105,8 @@ struct Statistics {
     failed_requests: AtomicU64,
     analyzed_files: AtomicU64,
     file_analysis_errors: AtomicU64,
+    analyzed_terminal_events: AtomicU64,
+    terminal_analysis_errors: AtomicU64,
 }
 
 impl Statistics {
@@ -105,6 +116,7 @@ impl Statistics {
         worker_count: usize,
         queue_capacity: usize,
         collector: FileCollectorStatistics,
+        capture: CaptureClientStatistics,
     ) -> DaemonStatus {
         DaemonStatus {
             schema_version,
@@ -127,6 +139,22 @@ impl Statistics {
                 invalidated_watches: collector.invalidated_watches,
                 analyzed_files: self.analyzed_files.load(Ordering::Relaxed),
                 analysis_errors: self.file_analysis_errors.load(Ordering::Relaxed),
+            },
+            capture: CaptureStatus {
+                configured_sources: capture.configured_sources,
+                active_sources: capture.active_sources,
+                connected_sources: capture.connected_sources,
+                connection_attempts: capture.connection_attempts,
+                reconnects: capture.reconnects,
+                events_received: capture.events_received,
+                events_analyzed: self.analyzed_terminal_events.load(Ordering::Relaxed),
+                analysis_errors: self.terminal_analysis_errors.load(Ordering::Relaxed),
+                dropped_events: capture.dropped_events,
+                protocol_errors: capture.protocol_errors,
+                helper_errors: capture.helper_errors,
+                ring_dropped: capture.ring_dropped,
+                read_failed: capture.read_failed,
+                fail_closed: capture.fail_closed,
             },
         }
     }
@@ -153,6 +181,7 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
     let database = Database::open(&config.database_path)?;
     let schema_version = database.schema_version()?;
     let stored_watches = database.all_watch_directories()?;
+    let stored_terminals = database.all_terminals()?;
     fs::set_permissions(&config.database_path, fs::Permissions::from_mode(0o600))?;
     drop(database);
     let listener = bind_secure_socket(&config.socket_path)?;
@@ -184,6 +213,28 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
     )?;
     let collector_control = collector.control();
     let collector_metrics = collector.metrics();
+    let capture_registrations = stored_terminals
+        .iter()
+        .map(|terminal| CaptureRegistration {
+            session_id: terminal.session_id,
+            terminal: terminal.terminal.clone(),
+        })
+        .collect::<Vec<_>>();
+    let capture_active_sessions = stored_terminals
+        .iter()
+        .filter(|terminal| terminal.active)
+        .map(|terminal| terminal.session_id)
+        .collect::<HashSet<_>>();
+    let capture_sender = sender.clone();
+    let capture_statistics = Arc::clone(&statistics);
+    let capture = CaptureClient::start(
+        config.capture_client.clone(),
+        capture_registrations,
+        capture_active_sessions,
+        move |event| enqueue_terminal(&capture_sender, event, &capture_statistics),
+    )?;
+    let capture_control = capture.control();
+    let capture_metrics = capture.metrics();
     let receiver = Arc::new(Mutex::new(receiver));
     let session_state_lock = Arc::new(Mutex::new(()));
     let queue_capacity = config.queue_capacity;
@@ -198,6 +249,8 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
             session_state_lock: Arc::clone(&session_state_lock),
             collector_control: collector_control.clone(),
             collector_metrics: collector_metrics.clone(),
+            capture_control: capture_control.clone(),
+            capture_metrics: capture_metrics.clone(),
             schema_version,
             worker_count,
             queue_capacity,
@@ -242,6 +295,7 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
         }
     }
     collector.shutdown()?;
+    capture.shutdown()?;
     drop(sender);
     for worker in workers {
         worker.join().map_err(|_| DaemonError::WorkerPanicked)??;
@@ -252,6 +306,7 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
 enum Work {
     Client(std::os::unix::net::UnixStream),
     File(CollectedFile),
+    Terminal(CollectedTerminalOutput),
 }
 
 fn enqueue_client(
@@ -278,7 +333,9 @@ fn enqueue_client(
             }
             Ok(())
         }
-        Err(TrySendError::Full(Work::File(_))) => unreachable!("client work changed variant"),
+        Err(TrySendError::Full(Work::File(_) | Work::Terminal(_))) => {
+            unreachable!("client work changed variant")
+        }
         Err(TrySendError::Disconnected(_)) => {
             statistics.queue_depth.fetch_sub(1, Ordering::Relaxed);
             Err(DaemonError::WorkerStopped)
@@ -297,6 +354,21 @@ fn enqueue_file(sender: &SyncSender<Work>, file: CollectedFile, statistics: &Sta
     }
 }
 
+fn enqueue_terminal(
+    sender: &SyncSender<Work>,
+    event: CollectedTerminalOutput,
+    statistics: &Statistics,
+) -> bool {
+    statistics.queue_depth.fetch_add(1, Ordering::Relaxed);
+    match sender.try_send(Work::Terminal(event)) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
+            statistics.queue_depth.fetch_sub(1, Ordering::Relaxed);
+            false
+        }
+    }
+}
+
 struct WorkerContext {
     receiver: Arc<Mutex<Receiver<Work>>>,
     statistics: Arc<Statistics>,
@@ -304,6 +376,8 @@ struct WorkerContext {
     session_state_lock: Arc<Mutex<()>>,
     collector_control: hunter_collectors::FileCollectorControl,
     collector_metrics: FileCollectorMetrics,
+    capture_control: hunter_capture_client::CaptureClientControl,
+    capture_metrics: CaptureClientMetrics,
     schema_version: usize,
     worker_count: usize,
     queue_capacity: usize,
@@ -317,6 +391,8 @@ fn worker_loop(database: Database, context: WorkerContext) -> Result<(), DaemonE
         session_state_lock: Arc::clone(&context.session_state_lock),
         collector_control: context.collector_control,
         collector_metrics: context.collector_metrics,
+        capture_control: context.capture_control,
+        capture_metrics: context.capture_metrics,
         schema_version: context.schema_version,
         worker_count: context.worker_count,
         queue_capacity: context.queue_capacity,
@@ -351,6 +427,21 @@ fn worker_loop(database: Database, context: WorkerContext) -> Result<(), DaemonE
                         .fetch_add(1, Ordering::Relaxed);
                 }
             },
+            Work::Terminal(event) => match service.handle_terminal(event) {
+                Ok(true) => {
+                    context
+                        .statistics
+                        .analyzed_terminal_events
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    context
+                        .statistics
+                        .terminal_analysis_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+            },
         }
     }
     Ok(())
@@ -363,6 +454,8 @@ struct Service {
     session_state_lock: Arc<Mutex<()>>,
     collector_control: hunter_collectors::FileCollectorControl,
     collector_metrics: FileCollectorMetrics,
+    capture_control: hunter_capture_client::CaptureClientControl,
+    capture_metrics: CaptureClientMetrics,
     schema_version: usize,
     worker_count: usize,
     queue_capacity: usize,
@@ -432,6 +525,7 @@ impl Service {
                 self.worker_count,
                 self.queue_capacity,
                 self.collector_metrics.snapshot(),
+                self.capture_metrics.snapshot(),
             ))),
             Request::CreateSession {
                 name,
@@ -494,6 +588,18 @@ impl Service {
             Request::ListWatchDirectories { session_id } => {
                 self.require_session(session_id)?;
                 self.watch_directories_response(session_id)
+            }
+            Request::AddTerminal {
+                session_id,
+                terminal,
+            } => self.add_terminal(session_id, terminal),
+            Request::RemoveTerminal {
+                session_id,
+                terminal,
+            } => self.remove_terminal(session_id, terminal),
+            Request::ListTerminals { session_id } => {
+                self.require_session(session_id)?;
+                self.terminals_response(session_id)
             }
             Request::SubmitText { session_id, text } => {
                 let lock = Arc::clone(&self.session_state_lock);
@@ -559,6 +665,19 @@ impl Service {
                 .save_session(previous)
                 .map_err(internal_error)?;
             return Err(collector_control_error(error));
+        }
+        if let Err(error) = self
+            .capture_control
+            .set_session_active(session.id(), active)
+        {
+            let previous_active = previous.status() == SessionStatus::Monitoring;
+            let _ = self
+                .collector_control
+                .set_session_active(session.id(), previous_active);
+            self.database
+                .save_session(previous)
+                .map_err(internal_error)?;
+            return Err(capture_control_error(error));
         }
         Ok(())
     }
@@ -664,6 +783,93 @@ impl Service {
         })
     }
 
+    fn add_terminal(
+        &mut self,
+        session_id: SessionId,
+        terminal: String,
+    ) -> Result<Response, (ErrorCode, String)> {
+        let lock = Arc::clone(&self.session_state_lock);
+        let _guard = lock.lock().map_err(|_| state_lock_error())?;
+        let session = self.require_session(session_id)?;
+        if session.status() == SessionStatus::Finished {
+            return Err((
+                ErrorCode::InvalidState,
+                "terminal sources cannot be changed for a finished session".to_owned(),
+            ));
+        }
+        let terminal = canonical_terminal(&terminal)?;
+        let inserted = self
+            .database
+            .add_terminal(session_id, &terminal)
+            .map_err(internal_error)?;
+        let registration = CaptureRegistration {
+            session_id,
+            terminal: terminal.clone(),
+        };
+        if let Err(error) = self.capture_control.register(registration) {
+            if inserted {
+                self.database
+                    .remove_terminal(session_id, &terminal)
+                    .map_err(internal_error)?;
+            }
+            return Err(capture_control_error(error));
+        }
+        self.terminals_response(session_id)
+    }
+
+    fn remove_terminal(
+        &mut self,
+        session_id: SessionId,
+        terminal: String,
+    ) -> Result<Response, (ErrorCode, String)> {
+        let lock = Arc::clone(&self.session_state_lock);
+        let _guard = lock.lock().map_err(|_| state_lock_error())?;
+        let session = self.require_session(session_id)?;
+        if session.status() == SessionStatus::Finished {
+            return Err((
+                ErrorCode::InvalidState,
+                "terminal sources cannot be changed for a finished session".to_owned(),
+            ));
+        }
+        let terminal = removable_terminal(&terminal)?;
+        let removed = self
+            .database
+            .remove_terminal(session_id, &terminal)
+            .map_err(internal_error)?;
+        if removed {
+            let registration = CaptureRegistration {
+                session_id,
+                terminal: terminal.clone(),
+            };
+            if let Err(error) = self.capture_control.unregister(registration) {
+                self.database
+                    .add_terminal(session_id, &terminal)
+                    .map_err(internal_error)?;
+                return Err(capture_control_error(error));
+            }
+        }
+        self.terminals_response(session_id)
+    }
+
+    fn terminals_response(&self, session_id: SessionId) -> Result<Response, (ErrorCode, String)> {
+        let terminals = self
+            .database
+            .list_terminals(session_id)
+            .map_err(internal_error)?
+            .into_iter()
+            .map(|terminal| {
+                terminal
+                    .into_os_string()
+                    .into_string()
+                    .map_err(|_| internal_error("stored terminal path is not valid UTF-8"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Response::Terminals {
+            session_id,
+            terminals,
+        })
+    }
+
     fn handle_file(&mut self, file: CollectedFile) -> Result<bool, (ErrorCode, String)> {
         let lock = Arc::clone(&self.session_state_lock);
         let _guard = lock.lock().map_err(|_| state_lock_error())?;
@@ -678,6 +884,38 @@ impl Service {
             file.session_id,
             Timestamp::now(),
             SourceMetadata::File(FileSource::new(source_path)),
+            payload,
+        );
+        self.analyze_event(&session, &event)?;
+        Ok(true)
+    }
+
+    fn handle_terminal(
+        &mut self,
+        output: CollectedTerminalOutput,
+    ) -> Result<bool, (ErrorCode, String)> {
+        let lock = Arc::clone(&self.session_state_lock);
+        let _guard = lock.lock().map_err(|_| state_lock_error())?;
+        let session = self.require_session(output.session_id)?;
+        if session.status() != SessionStatus::Monitoring {
+            return Ok(false);
+        }
+        if output.uid != geteuid().as_raw() {
+            return Err((
+                ErrorCode::PermissionDenied,
+                "capture event UID does not match daemon UID".to_owned(),
+            ));
+        }
+        let payload = EventPayload::new(output.payload).map_err(invalid_request)?;
+        let tty = SourcePath::new(output.terminal).map_err(invalid_request)?;
+        let source =
+            TerminalSource::new(output.pid, output.uid, None, output.process_name, None, tty)
+                .map_err(invalid_request)?;
+        let event = CaptureEvent::new(
+            EventId::generate(),
+            output.session_id,
+            Timestamp::now(),
+            SourceMetadata::Terminal(source),
             payload,
         );
         self.analyze_event(&session, &event)?;
@@ -801,6 +1039,13 @@ fn collector_control_error(error: CollectorControlError) -> (ErrorCode, String) 
     }
 }
 
+fn capture_control_error(error: CaptureControlError) -> (ErrorCode, String) {
+    match error {
+        CaptureControlError::Busy => (ErrorCode::Busy, CaptureControlError::Busy.to_string()),
+        other => internal_error(other),
+    }
+}
+
 fn canonical_watch_directory(value: &str) -> Result<PathBuf, (ErrorCode, String)> {
     let directory = fs::canonicalize(value).map_err(invalid_request)?;
     if !directory.is_absolute() || !directory.is_dir() {
@@ -839,6 +1084,61 @@ fn removable_watch_directory(value: &str) -> Result<PathBuf, (ErrorCode, String)
         ));
     }
     Ok(directory)
+}
+
+fn canonical_terminal(value: &str) -> Result<PathBuf, (ErrorCode, String)> {
+    let terminal = fs::canonicalize(value).map_err(invalid_request)?;
+    if !terminal.is_absolute() || !is_supported_terminal_path(&terminal) {
+        return Err(invalid_request(
+            "terminal must resolve to /dev/pts/N or /dev/ttyN",
+        ));
+    }
+    let metadata = fs::metadata(&terminal).map_err(invalid_request)?;
+    if !metadata.file_type().is_char_device() || metadata.uid() != geteuid().as_raw() {
+        return Err((
+            ErrorCode::PermissionDenied,
+            "terminal must be a character device owned by the daemon UID".to_owned(),
+        ));
+    }
+    terminal
+        .to_str()
+        .ok_or_else(|| invalid_request("terminal path must be valid UTF-8"))?;
+    Ok(terminal)
+}
+
+fn removable_terminal(value: &str) -> Result<PathBuf, (ErrorCode, String)> {
+    if let Ok(terminal) = fs::canonicalize(value)
+        && is_supported_terminal_path(&terminal)
+    {
+        return Ok(terminal);
+    }
+    let terminal = PathBuf::from(value);
+    if !terminal.is_absolute()
+        || !is_supported_terminal_path(&terminal)
+        || terminal.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+        || terminal.to_str().is_none()
+    {
+        return Err(invalid_request(
+            "missing terminal must be a normalized /dev/pts/N or /dev/ttyN path",
+        ));
+    }
+    Ok(terminal)
+}
+
+fn is_supported_terminal_path(path: &Path) -> bool {
+    let Some(value) = path.to_str() else {
+        return false;
+    };
+    value.strip_prefix("/dev/pts/").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    }) || value.strip_prefix("/dev/tty").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 fn summary_from_database(value: hunter_database::FindingSummary) -> FindingSummary {
@@ -895,8 +1195,15 @@ mod tests {
         statistics.queue_depth.store(7, Ordering::Relaxed);
         statistics.rejected_connections.store(3, Ordering::Relaxed);
 
-        let snapshot = statistics.snapshot(2, 4, 64, FileCollectorStatistics::default());
+        let snapshot = statistics.snapshot(
+            3,
+            4,
+            64,
+            FileCollectorStatistics::default(),
+            CaptureClientStatistics::default(),
+        );
 
+        assert_eq!(snapshot.schema_version, 3);
         assert_eq!(snapshot.queue_depth, 7);
         assert_eq!(snapshot.rejected_connections, 3);
         assert_eq!(snapshot.worker_count, 4);

@@ -1,0 +1,40 @@
+[Unit]
+Description=CTF Hunter privileged terminal capture service
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=ctf-hunter
+RuntimeDirectory=ctf-hunter
+RuntimeDirectoryMode=0750
+ExecStart=/usr/libexec/ctf-hunter-capture serve --socket /run/ctf-hunter/capture.sock
+Restart=on-failure
+RestartSec=2s
+UMask=0007
+
+AmbientCapabilities=CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON
+NoNewPrivileges=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RemoveIPC=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service bpf
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
