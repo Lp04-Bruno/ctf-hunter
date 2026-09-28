@@ -26,6 +26,38 @@ pub const STAT_TRUNCATED: u32 = 14;
 pub const STAT_COUNT: u32 = 15;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum FailureReason {
+    None = 0,
+    TtyArgument = 1,
+    TtyIndex = 2,
+    TtyDriverPointer = 3,
+    TtyDriverNumber = 4,
+    TaskSignalPointer = 5,
+    ProcessGroupPointer = 6,
+    ForegroundProcessGroup = 7,
+    MapMutation = 8,
+}
+
+impl FailureReason {
+    #[must_use]
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::None),
+            1 => Some(Self::TtyArgument),
+            2 => Some(Self::TtyIndex),
+            3 => Some(Self::TtyDriverPointer),
+            4 => Some(Self::TtyDriverNumber),
+            5 => Some(Self::TaskSignalPointer),
+            6 => Some(Self::ProcessGroupPointer),
+            7 => Some(Self::ForegroundProcessGroup),
+            8 => Some(Self::MapMutation),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum CaptureKind {
     TtyWrite = 3,
@@ -141,5 +173,15 @@ mod tests {
         bytes[24..26].copy_from_slice(&257_u16.to_ne_bytes());
         bytes[26] = CaptureKind::TtyWrite as u8;
         assert!(CaptureEvent::from_wire(&bytes).is_none());
+    }
+
+    #[test]
+    fn parses_failure_reasons() {
+        assert_eq!(FailureReason::from_u32(0), Some(FailureReason::None));
+        assert_eq!(
+            FailureReason::from_u32(7),
+            Some(FailureReason::ForegroundProcessGroup)
+        );
+        assert_eq!(FailureReason::from_u32(9), None);
     }
 }
