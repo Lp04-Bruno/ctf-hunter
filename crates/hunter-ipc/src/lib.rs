@@ -66,6 +66,17 @@ pub enum Request {
     ListWatchDirectories {
         session_id: SessionId,
     },
+    AddTerminal {
+        session_id: SessionId,
+        terminal: String,
+    },
+    RemoveTerminal {
+        session_id: SessionId,
+        terminal: String,
+    },
+    ListTerminals {
+        session_id: SessionId,
+    },
     SubmitText {
         session_id: SessionId,
         text: String,
@@ -119,6 +130,10 @@ pub enum Response {
         session_id: SessionId,
         directories: Vec<String>,
     },
+    Terminals {
+        session_id: SessionId,
+        terminals: Vec<String>,
+    },
     Submission {
         event_id: EventId,
         finding_ids: Vec<FindingId>,
@@ -160,6 +175,7 @@ pub struct DaemonStatus {
     pub completed_requests: u64,
     pub failed_requests: u64,
     pub file_collector: FileCollectorStatus,
+    pub capture: CaptureStatus,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -175,6 +191,24 @@ pub struct FileCollectorStatus {
     pub invalidated_watches: u64,
     pub analyzed_files: u64,
     pub analysis_errors: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CaptureStatus {
+    pub configured_sources: usize,
+    pub active_sources: usize,
+    pub connected_sources: usize,
+    pub connection_attempts: u64,
+    pub reconnects: u64,
+    pub events_received: u64,
+    pub events_analyzed: u64,
+    pub analysis_errors: u64,
+    pub dropped_events: u64,
+    pub protocol_errors: u64,
+    pub helper_errors: u64,
+    pub ring_dropped: u64,
+    pub read_failed: u64,
+    pub fail_closed: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

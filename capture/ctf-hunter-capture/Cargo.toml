@@ -10,12 +10,18 @@ build = "build.rs"
 anyhow.workspace = true
 aya.workspace = true
 ctf-hunter-common = { path = "../ctf-hunter-common" }
+hunter-capture-protocol = { path = "../../crates/hunter-capture-protocol" }
+nix.workspace = true
+signal-hook.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true
 aya-build.workspace = true
 cargo_metadata = "0.23"
 ctf-hunter-ebpf = { path = "../ctf-hunter-ebpf" }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [[bin]]
 name = "ctf-hunter-capture"

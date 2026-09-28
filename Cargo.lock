@@ -262,6 +262,10 @@ dependencies = [
  "cargo_metadata",
  "ctf-hunter-common",
  "ctf-hunter-ebpf",
+ "hunter-capture-protocol",
+ "nix",
+ "signal-hook",
+ "tempfile",
 ]
 
 [[package]]
@@ -281,6 +285,8 @@ dependencies = [
 name = "ctf-hunterd"
 version = "0.1.0"
 dependencies = [
+ "hunter-capture-client",
+ "hunter-capture-protocol",
  "hunter-collectors",
  "hunter-core",
  "hunter-database",
@@ -424,6 +430,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
 dependencies = [
  "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "hunter-capture-client"
+version = "0.1.0"
+dependencies = [
+ "hunter-capture-protocol",
+ "hunter-types",
+ "nix",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "hunter-capture-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

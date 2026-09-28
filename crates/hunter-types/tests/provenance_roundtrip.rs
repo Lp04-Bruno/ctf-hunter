@@ -36,7 +36,7 @@ fn public_api_preserves_an_end_to_end_provenance_chain() {
             TerminalSource::new(
                 4_242,
                 1_000,
-                1,
+                Some(1),
                 "curl",
                 Some(SourcePath::new("/usr/bin/curl").expect("valid path")),
                 SourcePath::new("/dev/pts/2").expect("valid path"),

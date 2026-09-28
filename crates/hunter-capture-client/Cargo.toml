@@ -1,0 +1,18 @@
+[package]
+name = "hunter-capture-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+hunter-capture-protocol = { path = "../hunter-capture-protocol" }
+hunter-types = { path = "../hunter-types" }
+nix.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
