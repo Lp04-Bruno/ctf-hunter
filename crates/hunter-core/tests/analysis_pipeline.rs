@@ -62,6 +62,27 @@ fn recursively_decodes_double_base64() {
 }
 
 #[test]
+fn decodes_html_entity_flag_at_plain_text_token_end() {
+    let analyzer = Analyzer::new(AnalysisConfig::default(), [FlagPattern::simple("FLAG{*}")])
+        .expect("valid analyzer");
+    let report = analyzer
+        .analyze(&event(b"FLAG&#123;test&#125;"))
+        .expect("analysis should succeed");
+    let finding = report
+        .findings()
+        .iter()
+        .find(|finding| finding.value().as_str() == "FLAG{test}")
+        .expect("HTML entity flag should be found");
+
+    let transformation = report
+        .transformations()
+        .iter()
+        .find(|transformation| transformation.output_candidate_id() == finding.candidate_id())
+        .expect("HTML entity transformation should exist");
+    assert_eq!(transformation.name().as_str(), "html_entities");
+}
+
+#[test]
 fn recursively_parses_json_produced_by_a_decoder() {
     let analyzer = Analyzer::new(AnalysisConfig::default(), [FlagPattern::simple("FLAG{*}")])
         .expect("valid analyzer");

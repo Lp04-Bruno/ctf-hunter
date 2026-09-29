@@ -110,14 +110,57 @@ fn extract_plain_text(
     }
     for token in input.split(|character: char| character.is_whitespace() || character.is_control())
     {
-        let token = token.trim_matches(|character: char| {
-            matches!(character, '"' | '\'' | ',' | ';' | '(' | ')' | '[' | ']')
-        });
+        let token = trim_plain_text_token(token);
         if token.len() >= 3 {
             push_value(&mut output, base_path.clone(), token.as_bytes(), limits)?;
         }
     }
     Ok(output)
+}
+
+fn trim_plain_text_token(token: &str) -> &str {
+    let mut token = token.trim_start_matches(is_plain_text_punctuation);
+
+    while let Some((index, character)) = token.char_indices().next_back() {
+        if !is_plain_text_punctuation(character)
+            || (character == ';' && ends_with_html_entity(token))
+        {
+            break;
+        }
+        token = &token[..index];
+    }
+
+    token
+}
+
+fn is_plain_text_punctuation(character: char) -> bool {
+    matches!(character, '"' | '\'' | ',' | ';' | '(' | ')' | '[' | ']')
+}
+
+fn ends_with_html_entity(token: &str) -> bool {
+    let Some(without_semicolon) = token.strip_suffix(';') else {
+        return false;
+    };
+    let Some((_, entity)) = without_semicolon.rsplit_once('&') else {
+        return false;
+    };
+
+    if let Some(numeric) = entity.strip_prefix('#') {
+        if let Some(hexadecimal) = numeric
+            .strip_prefix('x')
+            .or_else(|| numeric.strip_prefix('X'))
+        {
+            !hexadecimal.is_empty() && hexadecimal.bytes().all(|byte| byte.is_ascii_hexdigit())
+        } else {
+            !numeric.is_empty() && numeric.bytes().all(|byte| byte.is_ascii_digit())
+        }
+    } else {
+        entity
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic)
+            && entity.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    }
 }
 
 fn is_decimal_ascii_sequence(value: &str) -> bool {
@@ -182,6 +225,22 @@ mod tests {
         .expect("valid text");
 
         assert!(values.iter().any(|value| value.data() == b"FLAG{test}"));
+    }
+
+    #[test]
+    fn preserves_terminal_html_entities_but_trims_ordinary_semicolons() {
+        let values = extract_candidates(
+            "FLAG&#123;decimal&#125; FLAG&#x7b;hex&#X7D; FLAG&lbrace;named&rbrace; ordinary;;;",
+            &CandidatePath::root(),
+            ExtractionLimits::default(),
+        )
+        .expect("valid text");
+        let candidates: Vec<_> = values.iter().map(|value| value.data().to_vec()).collect();
+
+        assert!(candidates.contains(&b"FLAG&#123;decimal&#125;".to_vec()));
+        assert!(candidates.contains(&b"FLAG&#x7b;hex&#X7D;".to_vec()));
+        assert!(candidates.contains(&b"FLAG&lbrace;named&rbrace;".to_vec()));
+        assert!(candidates.contains(&b"ordinary".to_vec()));
     }
 
     #[test]
