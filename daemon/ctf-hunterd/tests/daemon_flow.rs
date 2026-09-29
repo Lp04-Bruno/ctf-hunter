@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ctf_hunterd::{DaemonConfig, run};
+use ctf_hunterd::{DEFAULT_QUEUE_CAPACITY, DaemonConfig, run};
 use hunter_capture_client::CaptureClientConfig;
 use hunter_capture_protocol::{
     CaptureHealth, CapturedOutput, ClientMessage, ServerMessage, read_client, write_server,
@@ -20,7 +20,9 @@ use hunter_ipc::{
     ErrorCode, IpcClient, MAX_FRAME_BYTES, PROTOCOL_VERSION, Request, RequestEnvelope, Response,
     ResponseEnvelope, read_frame,
 };
-use hunter_types::{Session, SessionId, SourceMetadata, Timestamp};
+use hunter_types::{
+    Confidence, NotificationSettings, Session, SessionId, SourceMetadata, Timestamp,
+};
 use tempfile::tempdir;
 
 fn start(config: DaemonConfig) -> thread::JoinHandle<Result<(), ctf_hunterd::DaemonError>> {
@@ -85,6 +87,39 @@ fn wait_for_findings(config: &DaemonConfig, session_id: hunter_types::SessionId,
         );
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn persists_notification_settings_through_typed_ipc() {
+    let directory = tempdir().expect("tempdir");
+    let config = DaemonConfig::new(
+        directory.path().join("data/hunter.db"),
+        directory.path().join("runtime/daemon.sock"),
+    );
+    let daemon = start(config.clone());
+    assert_eq!(
+        request(&config, 1, Request::GetNotificationSettings),
+        Response::NotificationSettings(NotificationSettings::default())
+    );
+    let settings = NotificationSettings {
+        enabled: false,
+        minimum_confidence: Confidence::VeryHigh,
+    };
+    assert_eq!(
+        request(&config, 2, Request::UpdateNotificationSettings { settings },),
+        Response::NotificationSettings(settings)
+    );
+    assert!(matches!(
+        request(&config, 3, Request::GetStatus),
+        Response::Status(status) if status.notifications.queue_capacity == 32
+    ));
+    shutdown(&config, daemon);
+
+    let database = Database::open(&config.database_path).expect("database");
+    assert_eq!(
+        database.notification_settings().expect("settings"),
+        settings
+    );
 }
 
 #[test]
@@ -182,9 +217,9 @@ fn analyzes_queries_and_recovers_findings_after_restart() {
     }
     match request(&config, 6, Request::GetStatus) {
         Response::Status(status) => {
-            assert_eq!(status.schema_version, 3);
+            assert_eq!(status.schema_version, 4);
             assert_eq!(status.worker_count, 4);
-            assert_eq!(status.queue_capacity, 64);
+            assert_eq!(status.queue_capacity, DEFAULT_QUEUE_CAPACITY);
             assert!(status.completed_requests >= 3);
             assert!(status.failed_requests >= 1);
             assert_eq!(status.analysis.events_analyzed, 1);

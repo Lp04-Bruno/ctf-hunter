@@ -15,6 +15,7 @@
     DaemonStatus,
     FindingDetail,
     FindingSummary,
+    NotificationSettings,
     Page,
     Session,
     Sources,
@@ -24,6 +25,7 @@
   let sessions: Session[] = [];
   let activeSessionId: string | null = null;
   let status: DaemonStatus | null = null;
+  let notificationSettings: NotificationSettings = { enabled: true, minimum_confidence: "high" };
   let findings: FindingSummary[] = [];
   let findingDetails: Record<string, FindingDetail> = {};
   let selectedFindingId: string | null = null;
@@ -63,8 +65,13 @@
     if (refreshing) return;
     refreshing = true;
     try {
-      const [nextStatus, nextSessions] = await Promise.all([api.status(), api.sessions()]);
+      const [nextStatus, nextSessions, nextNotificationSettings] = await Promise.all([
+        api.status(),
+        api.sessions(),
+        api.notificationSettings(),
+      ]);
       status = nextStatus;
+      notificationSettings = nextNotificationSettings;
       sessions = nextSessions;
       connected = true;
       error = "";
@@ -210,6 +217,18 @@
     pollingTimer = seconds > 0 ? setInterval(() => void refresh(), seconds * 1_000) : undefined;
   }
 
+  async function saveNotificationSettings(settings: NotificationSettings) {
+    busy = true;
+    try {
+      notificationSettings = await api.updateNotificationSettings(settings);
+      showToast("Notification settings saved.");
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      busy = false;
+    }
+  }
+
   onMount(() => {
     const savedTheme = localStorage.getItem("ctf-hunter-theme");
     if (savedTheme === "light" || savedTheme === "dark" || savedTheme === "system") applyTheme(savedTheme);
@@ -273,8 +292,12 @@
           {theme}
           {refreshInterval}
           previewMode={usesPreviewData}
+          {notificationSettings}
+          notificationStatus={status?.notifications ?? null}
+          {busy}
           onTheme={applyTheme}
           onRefreshInterval={applyRefreshInterval}
+          onNotificationSettings={(settings) => void saveNotificationSettings(settings)}
         />
       {/if}
     </main>
