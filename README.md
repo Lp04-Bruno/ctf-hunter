@@ -24,6 +24,13 @@ cd ui && npm ci && npm run check && npm test && npm run build
 
 Development follows Git Flow: feature branches merge into `develop`, while `master` remains releasable.
 
+Release compatibility, versioning, and data-retention guarantees are documented in
+[`docs/release-policy.md`](docs/release-policy.md). Release metadata is validated with:
+
+```bash
+python3 scripts/check-release-metadata.py
+```
+
 ## Daemon
 
 ```bash
@@ -62,3 +69,10 @@ target/debug/ctf-hunterd --capture-socket /run/ctf-hunter/capture.sock
 ```
 
 The production units are in `packaging/systemd/`. The system helper is restricted to `CAP_BPF`, `CAP_PERFMON`, Unix sockets, and a hardened filesystem view. The per-user daemon remains unprivileged. Membership in the package-created `ctf-hunter` group grants access to the helper socket; add the intended desktop user to that group during installation and start a new login session before enabling capture. The helper still limits each client to terminals owned by its authenticated UID.
+
+## License
+
+Copyright 2026 Lp04-Bruno.
+
+CTF Hunter is licensed under either the Apache License, Version 2.0 or the MIT License,
+at your option. See [`LICENSE-APACHE`](LICENSE-APACHE) and [`LICENSE-MIT`](LICENSE-MIT).

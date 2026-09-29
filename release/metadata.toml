@@ -1,0 +1,38 @@
+schema_version = 1
+product_name = "CTF Hunter"
+package_name = "ctf-hunter"
+application_version = "0.1.0"
+debian_revision = "1"
+debian_version = "0.1.0-1"
+debian_prerelease_example = "0.1.0~rc1-1"
+architecture = "amd64"
+desktop_identifier = "dev.ctfhunter.desktop"
+license = "MIT OR Apache-2.0"
+copyright_holder = "Lp04-Bruno"
+copyright_year = 2026
+maintainer_name = "Lp04-Bruno"
+maintainer_email = "88251364+lp04-Bruno@users.noreply.github.com"
+repository = "https://github.com/Lp04-Bruno/ctf-hunter"
+homepage = "https://github.com/Lp04-Bruno/ctf-hunter"
+bug_reports = "https://github.com/Lp04-Bruno/ctf-hunter/issues"
+initial_release_channel = "public-github-release"
+apt_repository_enabled = false
+
+[platform]
+build_baseline = "Debian 12 (bookworm) amd64"
+validation_targets = ["Debian 12 (bookworm) amd64", "Kali Linux Rolling amd64"]
+minimum_rust = "1.98"
+desktop_runtime = "GTK 3 and WebKitGTK 4.1"
+
+[database]
+schema_generation = 4
+downgrade_contract = "same-schema-only"
+user_data_path = "~/.local/share/ctf-hunter"
+
+[git_flow]
+development_branch = "develop"
+release_branch = "release/0.1.0"
+production_branch = "master"
+release_tag = "v0.1.0"
+signed_annotated_tag_required = true
+tag_signing_identity = "Lp04-Bruno <88251364+lp04-Bruno@users.noreply.github.com>"
