@@ -315,6 +315,8 @@ pub struct FindingOccurrence {
     pub observed_at: Timestamp,
     pub count: u64,
     pub source: SourceMetadata,
+    #[serde(default)]
+    pub root_candidate_text: Option<String>,
     pub candidate_text: Option<String>,
     pub candidate_original_length: usize,
     pub candidate_truncated: bool,
@@ -432,5 +434,33 @@ mod tests {
             read_frame::<RequestEnvelope>(&mut Cursor::new(bytes)),
             Err(FrameError::Json(_))
         ));
+    }
+
+    #[test]
+    fn accepts_occurrences_from_before_root_candidate_text_was_added() {
+        let occurrence = FindingOccurrence {
+            source_event_id: EventId::generate(),
+            candidate_id: CandidateId::generate(),
+            path: CandidatePath::root(),
+            observed_at: Timestamp::from_unix_timestamp(1_800_000_000).expect("timestamp"),
+            count: 1,
+            source: SourceMetadata::Manual,
+            root_candidate_text: Some("raw".to_owned()),
+            candidate_text: Some("FLAG{test}".to_owned()),
+            candidate_original_length: 10,
+            candidate_truncated: false,
+            transformations: Vec::new(),
+        };
+        let mut encoded = serde_json::to_value(occurrence).expect("serialize occurrence");
+        encoded
+            .as_object_mut()
+            .expect("occurrence object")
+            .remove("root_candidate_text");
+
+        let decoded: FindingOccurrence =
+            serde_json::from_value(encoded).expect("deserialize legacy occurrence");
+
+        assert_eq!(decoded.root_candidate_text, None);
+        assert_eq!(decoded.candidate_text.as_deref(), Some("FLAG{test}"));
     }
 }
