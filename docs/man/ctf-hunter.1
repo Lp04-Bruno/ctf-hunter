@@ -1,0 +1,27 @@
+.TH CTF-HUNTER 1 "September 2026" "CTF Hunter 0.1.0" "User Commands"
+.SH NAME
+ctf-hunter \- open the CTF Hunter desktop application
+.SH SYNOPSIS
+.B ctf-hunter
+.SH DESCRIPTION
+.B ctf-hunter
+opens the native desktop interface for inspecting sessions, sources, findings,
+decoding paths, capture health, and notification settings.
+.PP
+The application connects to the per-user
+.B ctf-hunterd
+Unix socket. Closing the window does not stop the daemon or the privileged
+capture helper.
+.SH ENVIRONMENT
+.TP
+.B CTF_HUNTER_SOCKET
+Override the per-user daemon socket path. Normally the socket is
+.IR $XDG_RUNTIME_DIR/ctf-hunter/daemon.sock .
+.SH FILES
+.TP
+.I ~/.local/share/ctf-hunter/hunter.db
+Default per-user findings and session database.
+.SH SEE ALSO
+.BR ctf-hunterd (1),
+.BR ctf-hunterctl (1),
+.BR ctf-hunter-capture (1)

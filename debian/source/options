@@ -1,0 +1,9 @@
+tar-ignore=.git
+tar-ignore=.git-data
+tar-ignore=.agents
+tar-ignore=.codex
+tar-ignore=artifacts
+tar-ignore=setup
+tar-ignore=target
+tar-ignore=ui/dist
+tar-ignore=ui/node_modules
