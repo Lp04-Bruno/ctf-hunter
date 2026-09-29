@@ -6,8 +6,8 @@ use std::{
 };
 
 use hunter_types::{
-    CandidateId, CandidatePath, Confidence, EventId, FindingId, Session, SessionId, SourceMetadata,
-    Timestamp, TransformationId,
+    CandidateId, CandidatePath, Confidence, EventId, FindingId, NotificationSettings, Session,
+    SessionId, SourceMetadata, Timestamp, TransformationId,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
@@ -39,6 +39,10 @@ impl RequestEnvelope {
 #[serde(rename_all = "snake_case", tag = "operation")]
 pub enum Request {
     GetStatus,
+    GetNotificationSettings,
+    UpdateNotificationSettings {
+        settings: NotificationSettings,
+    },
     ListSessions,
     CreateSession {
         name: String,
@@ -135,6 +139,7 @@ impl ResponseEnvelope {
 #[serde(rename_all = "snake_case", tag = "result")]
 pub enum Response {
     Status(DaemonStatus),
+    NotificationSettings(NotificationSettings),
     Sessions {
         sessions: Vec<Session>,
     },
@@ -191,6 +196,16 @@ pub struct DaemonStatus {
     pub file_collector: FileCollectorStatus,
     pub capture: CaptureStatus,
     pub analysis: AnalysisStatus,
+    pub notifications: NotificationStatus,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NotificationStatus {
+    pub queue_capacity: usize,
+    pub queue_depth: usize,
+    pub delivered: u64,
+    pub dropped: u64,
+    pub errors: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -199,6 +214,7 @@ pub struct AnalysisStatus {
     pub candidates_extracted: u64,
     pub candidates_decoded: u64,
     pub findings_detected: u64,
+    pub duplicate_events: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

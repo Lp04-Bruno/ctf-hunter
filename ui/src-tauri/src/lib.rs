@@ -8,7 +8,7 @@ use hunter_ipc::{
     AnalysisPreview, DaemonStatus, FindingDetail, FindingSummary, IpcClient, Request,
     RequestEnvelope, Response,
 };
-use hunter_types::{EventId, FindingId, Session, SessionId};
+use hunter_types::{EventId, FindingId, NotificationSettings, Session, SessionId};
 use nix::unistd::geteuid;
 use serde::Serialize;
 use tauri::State;
@@ -63,6 +63,25 @@ async fn daemon_status(state: State<'_, AppState>) -> Result<DaemonStatus, Strin
     match send(&state, Request::GetStatus).await? {
         Response::Status(status) => Ok(status),
         _ => Err("daemon returned an unexpected status response".to_owned()),
+    }
+}
+
+#[tauri::command]
+async fn notification_settings(state: State<'_, AppState>) -> Result<NotificationSettings, String> {
+    match send(&state, Request::GetNotificationSettings).await? {
+        Response::NotificationSettings(settings) => Ok(settings),
+        _ => Err("daemon returned an unexpected notification-settings response".to_owned()),
+    }
+}
+
+#[tauri::command]
+async fn update_notification_settings(
+    state: State<'_, AppState>,
+    settings: NotificationSettings,
+) -> Result<NotificationSettings, String> {
+    match send(&state, Request::UpdateNotificationSettings { settings }).await? {
+        Response::NotificationSettings(settings) => Ok(settings),
+        _ => Err("daemon returned an unexpected notification-settings response".to_owned()),
     }
 }
 
@@ -283,6 +302,8 @@ pub fn run() {
         .manage(AppState::new(default_socket_path()))
         .invoke_handler(tauri::generate_handler![
             daemon_status,
+            notification_settings,
+            update_notification_settings,
             list_sessions,
             create_session,
             update_session,

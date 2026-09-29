@@ -17,6 +17,20 @@ export interface AnalysisStatus {
   candidates_extracted: number;
   candidates_decoded: number;
   findings_detected: number;
+  duplicate_events: number;
+}
+
+export interface NotificationSettings {
+  enabled: boolean;
+  minimum_confidence: Confidence;
+}
+
+export interface NotificationStatus {
+  queue_capacity: number;
+  queue_depth: number;
+  delivered: number;
+  dropped: number;
+  errors: number;
 }
 
 export interface FileCollectorStatus {
@@ -62,6 +76,7 @@ export interface DaemonStatus {
   file_collector: FileCollectorStatus;
   capture: CaptureStatus;
   analysis: AnalysisStatus;
+  notifications: NotificationStatus;
 }
 
 export type PathSegment =

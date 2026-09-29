@@ -609,6 +609,29 @@ mod tests {
     }
 
     #[test]
+    fn large_json_input_remains_within_root_candidate_budget() {
+        let values = (0..1_100)
+            .map(|index| format!("\"field-{index:04}-{}\"", "x".repeat(32)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let payload = format!("[{values}]");
+        assert!(payload.len() < hunter_types::MAX_EVENT_PAYLOAD_BYTES);
+        let report = Analyzer::new(AnalysisConfig::default(), [])
+            .expect("valid analyzer")
+            .analyze(&event(payload.as_bytes()))
+            .expect("large JSON should stay analyzable");
+        assert_eq!(
+            report.statistics().unique_root_candidates,
+            DEFAULT_MAX_ROOT_CANDIDATES
+        );
+        assert!(
+            report
+                .budget_limits()
+                .contains(&BudgetLimit::RootCandidates)
+        );
+    }
+
+    #[test]
     fn records_depth_budget_exhaustion() {
         let encoded_twice =
             "VWtWV1IxOVlWbFpVYlZaclVqQmtUMlZyY0VaWFJsbDNXa1ZrYVUxV2JGVk5WMUpIVkcxS1ZrMVZNVDA9";

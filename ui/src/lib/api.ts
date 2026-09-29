@@ -5,6 +5,7 @@ import type {
   DaemonStatus,
   FindingDetail,
   FindingSummary,
+  NotificationSettings,
   Session,
   Sources,
   Submission,
@@ -12,6 +13,8 @@ import type {
 
 export interface Api {
   status(): Promise<DaemonStatus>;
+  notificationSettings(): Promise<NotificationSettings>;
+  updateNotificationSettings(settings: NotificationSettings): Promise<NotificationSettings>;
   sessions(): Promise<Session[]>;
   createSession(name: string, flagPatterns: string[]): Promise<Session>;
   updateSession(sessionId: string, name: string, flagPatterns: string[]): Promise<Session>;
@@ -27,6 +30,8 @@ export interface Api {
 
 const tauriApi: Api = {
   status: () => invoke("daemon_status"),
+  notificationSettings: () => invoke("notification_settings"),
+  updateNotificationSettings: (settings) => invoke("update_notification_settings", { settings }),
   sessions: () => invoke("list_sessions"),
   createSession: (name, flagPatterns) => invoke("create_session", { name, flagPatterns }),
   updateSession: (sessionId, name, flagPatterns) =>

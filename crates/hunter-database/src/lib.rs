@@ -9,8 +9,9 @@ use std::{
 
 use hunter_core::AnalysisReport;
 use hunter_types::{
-    Candidate, CandidateId, CandidatePath, CaptureEvent, Confidence, EventId, FindingId, Session,
-    SessionId, SessionStatus, SourceMetadata, Timestamp, Transformation, TransformationId,
+    Candidate, CandidateId, CandidatePath, CaptureEvent, Confidence, EventId, FindingId,
+    NotificationSettings, Session, SessionId, SessionStatus, SourceMetadata, Timestamp,
+    Transformation, TransformationId,
 };
 use rusqlite::{Connection, OptionalExtension as _, Transaction, params};
 use thiserror::Error;
@@ -46,6 +47,12 @@ pub struct FindingSummary {
     pub discovered_at: Timestamp,
     pub occurrences: u64,
     pub source: Option<SourceMetadata>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistedFinding {
+    pub id: FindingId,
+    pub created: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,6 +122,29 @@ impl Database {
             field: "schema version",
             value: version.to_string(),
         })
+    }
+
+    pub fn notification_settings(&self) -> Result<NotificationSettings> {
+        let (enabled, confidence): (bool, String) = self.connection.query_row(
+            "SELECT enabled, minimum_confidence FROM notification_settings WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(NotificationSettings {
+            enabled,
+            minimum_confidence: parse_confidence(&confidence)?,
+        })
+    }
+
+    pub fn save_notification_settings(&self, settings: NotificationSettings) -> Result<()> {
+        self.connection.execute(
+            "UPDATE notification_settings SET enabled = ?1, minimum_confidence = ?2 WHERE id = 1",
+            params![
+                settings.enabled,
+                confidence_name(settings.minimum_confidence)
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn journal_mode(&self) -> Result<String> {
@@ -360,6 +390,21 @@ impl Database {
         event: &CaptureEvent,
         report: &AnalysisReport,
     ) -> Result<Vec<FindingId>> {
+        Ok(self
+            .persist_analysis_with_outcomes(event, report)?
+            .into_iter()
+            .map(|finding| finding.id)
+            .collect())
+    }
+
+    pub fn persist_analysis_with_outcomes(
+        &mut self,
+        event: &CaptureEvent,
+        report: &AnalysisReport,
+    ) -> Result<Vec<PersistedFinding>> {
+        if report.findings().is_empty() {
+            return Ok(Vec::new());
+        }
         let transaction = self.connection.transaction()?;
         transaction.execute(
             "INSERT INTO source_events(id, session_id, captured_at, source_json)
@@ -412,14 +457,14 @@ impl Database {
 
         let mut stored_ids = Vec::with_capacity(report.findings().len());
         for finding in report.findings() {
-            let id = upsert_finding(&transaction, finding)?;
+            let stored = upsert_finding(&transaction, finding)?;
             transaction.execute(
                 "INSERT INTO finding_occurrences(
                     finding_id, source_event_id, candidate_id, path_json, observed_at,
                     occurrence_count
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
-                    id.to_string(),
+                    stored.id.to_string(),
                     event.id().to_string(),
                     finding.candidate_id().to_string(),
                     serde_json::to_string(finding.path())?,
@@ -440,7 +485,7 @@ impl Database {
                     ],
                 )?;
             }
-            stored_ids.push(id);
+            stored_ids.push(stored);
         }
         transaction.commit()?;
         Ok(stored_ids)
@@ -675,7 +720,7 @@ fn insert_transformation(
 fn upsert_finding(
     transaction: &Transaction<'_>,
     finding: &hunter_types::FlagFinding,
-) -> Result<FindingId> {
+) -> Result<PersistedFinding> {
     let existing = transaction
         .query_row(
             "SELECT id, confidence FROM findings WHERE session_id = ?1 AND value = ?2",
@@ -690,7 +735,10 @@ fn upsert_finding(
                 params![confidence_name(finding.confidence()), id],
             )?;
         }
-        return parse_id(&id, "finding id");
+        return Ok(PersistedFinding {
+            id: parse_id(&id, "finding id")?,
+            created: false,
+        });
     }
     transaction.execute(
         "INSERT INTO findings(id, session_id, value, confidence, discovered_at)
@@ -703,7 +751,10 @@ fn upsert_finding(
             finding.discovered_at().to_string(),
         ],
     )?;
-    Ok(finding.id())
+    Ok(PersistedFinding {
+        id: finding.id(),
+        created: true,
+    })
 }
 
 struct RawFindingSummary {
@@ -855,7 +906,7 @@ mod tests {
         let directory = tempdir().expect("tempdir");
         let database = Database::open(directory.path().join("hunter.db")).expect("database");
 
-        assert_eq!(database.schema_version().expect("version"), 3);
+        assert_eq!(database.schema_version().expect("version"), 4);
         assert_eq!(database.journal_mode().expect("journal"), "wal");
         let columns = database
             .connection
@@ -866,6 +917,52 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()
             .expect("columns");
         assert!(!columns.iter().any(|column| column == "payload"));
+    }
+
+    #[test]
+    fn notification_settings_are_persistent_and_validated_by_the_schema() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("hunter.db");
+        let database = Database::open(&path).expect("database");
+        assert_eq!(
+            database.notification_settings().expect("default settings"),
+            NotificationSettings::default()
+        );
+        let settings = NotificationSettings {
+            enabled: false,
+            minimum_confidence: Confidence::VeryHigh,
+        };
+        database
+            .save_notification_settings(settings)
+            .expect("save settings");
+        drop(database);
+        assert_eq!(
+            Database::open(&path)
+                .expect("reopen")
+                .notification_settings()
+                .expect("stored settings"),
+            settings
+        );
+    }
+
+    #[test]
+    fn analysis_without_findings_does_not_write_source_events() {
+        let directory = tempdir().expect("tempdir");
+        let mut database = Database::open(directory.path().join("hunter.db")).expect("database");
+        let session = session();
+        database.save_session(&session).expect("save session");
+        let (event, report) = analyze(&session, "ordinary output", 1_800_000_001);
+        assert!(
+            database
+                .persist_analysis(&event, &report)
+                .expect("persist")
+                .is_empty()
+        );
+        let count: i64 = database
+            .connection
+            .query_row("SELECT COUNT(*) FROM source_events", [], |row| row.get(0))
+            .expect("count events");
+        assert_eq!(count, 0);
     }
 
     #[test]
@@ -1081,7 +1178,7 @@ mod tests {
         database
             .connection
             .execute(
-                "INSERT INTO schema_migrations(version, applied_at) VALUES (4, 'now')",
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (5, 'now')",
                 [],
             )
             .expect("future migration");
@@ -1090,8 +1187,8 @@ mod tests {
         assert!(matches!(
             Database::open(&path),
             Err(DatabaseError::UnsupportedSchema {
-                found: 4,
-                supported: 3
+                found: 5,
+                supported: 4
             })
         ));
     }

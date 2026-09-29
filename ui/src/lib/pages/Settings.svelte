@@ -1,14 +1,26 @@
 <script lang="ts">
-  import { Eye, Monitor, Moon, ShieldCheck, Sun } from "@lucide/svelte";
+  import { Bell, Eye, Monitor, Moon, ShieldCheck, Sun } from "@lucide/svelte";
+  import type { NotificationSettings, NotificationStatus } from "../types";
 
   export let theme: "system" | "light" | "dark";
   export let refreshInterval: number;
   export let previewMode: boolean;
+  export let notificationSettings: NotificationSettings;
+  export let notificationStatus: NotificationStatus | null;
+  export let busy: boolean;
   export let onTheme: (theme: "system" | "light" | "dark") => void;
   export let onRefreshInterval: (seconds: number) => void;
+  export let onNotificationSettings: (settings: NotificationSettings) => void;
 </script>
 
 <div class="settings-stack">
+  <section class="surface settings-section">
+    <div class="section-title"><Bell size={18} /><div><h2>Desktop notifications</h2><p>Delivered by the daemon even while this window is closed.</p></div></div>
+    <label class="setting-row"><span><strong>Finding alerts</strong><small>Only newly discovered findings trigger an alert</small></span><input class="switch" type="checkbox" checked={notificationSettings.enabled} disabled={busy} onchange={(event) => onNotificationSettings({ ...notificationSettings, enabled: event.currentTarget.checked })} /></label>
+    <label class="setting-row"><span><strong>Minimum confidence</strong><small>Lower-confidence candidates remain available in Findings</small></span><select value={notificationSettings.minimum_confidence} disabled={busy || !notificationSettings.enabled} onchange={(event) => onNotificationSettings({ ...notificationSettings, minimum_confidence: event.currentTarget.value as NotificationSettings["minimum_confidence"] })}><option value="low">Low and above</option><option value="medium">Medium and above</option><option value="high">High and above</option><option value="very_high">Very high only</option></select></label>
+    <div class="notification-health"><span>{notificationStatus?.delivered ?? 0} delivered</span><span>{notificationStatus?.dropped ?? 0} dropped</span><span>{notificationStatus?.errors ?? 0} delivery errors</span></div>
+  </section>
+
   <section class="surface settings-section">
     <div class="section-title"><Monitor size={18} /><div><h2>Appearance</h2><p>Match the desktop or choose a fixed application theme.</p></div></div>
     <div class="theme-options" role="radiogroup" aria-label="Color theme">
@@ -55,6 +67,9 @@
   .setting-row small { color: var(--muted); }
   .setting-row select { width: 180px; }
   .setting-row code { padding: 7px 9px; border-radius: 6px; background: var(--surface-muted); font: 0.72rem "JetBrains Mono", "Noto Sans Mono", monospace; }
+  .switch { width: 38px; height: 20px; accent-color: var(--accent); }
+  .notification-health { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.7rem; }
+  .notification-health span { padding: 5px 8px; border-radius: 999px; background: var(--surface-muted); }
   ul { display: grid; gap: 8px; margin: 0; padding-left: 22px; color: var(--muted); font-size: 0.77rem; }
   .preview-note { margin-top: 15px; padding: 10px 12px; border-radius: 7px; background: var(--accent-soft); color: var(--accent); font-size: 0.73rem; }
   @media (max-width: 600px) { .theme-options { grid-template-columns: 1fr; } .setting-row { align-items: stretch; flex-direction: column; } .setting-row select { width: 100%; } .setting-row code { overflow-wrap: anywhere; } }

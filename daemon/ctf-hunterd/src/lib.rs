@@ -1,17 +1,19 @@
+mod notifications;
+
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs, io,
     os::unix::{
         fs::FileTypeExt as _, fs::MetadataExt as _, fs::PermissionsExt as _, net::UnixListener,
     },
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender, TrySendError},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use hunter_capture_client::{
@@ -29,13 +31,13 @@ use hunter_flags::FlagPattern;
 use hunter_ipc::{
     AnalysisPreview, AnalysisStatus, CaptureStatus, DaemonStatus, ErrorCode, FileCollectorStatus,
     FindingDetail, FindingOccurrence, FindingSummary, FrameError, IO_TIMEOUT, MAX_LIST_LIMIT,
-    PROTOCOL_VERSION, PreviewDetection, PreviewFinding, PreviewStatistics, PreviewTransformation,
-    Request, RequestEnvelope, Response, ResponseEnvelope, TransformationStep, read_frame,
-    write_frame,
+    NotificationStatus, PROTOCOL_VERSION, PreviewDetection, PreviewFinding, PreviewStatistics,
+    PreviewTransformation, Request, RequestEnvelope, Response, ResponseEnvelope,
+    TransformationStep, read_frame, write_frame,
 };
 use hunter_types::{
-    CaptureEvent, EventId, EventPayload, FileSource, Session, SessionId, SessionStatus,
-    SourceMetadata, SourcePath, TerminalSource, Timestamp,
+    CaptureEvent, EventId, EventPayload, FileSource, NotificationSettings, Session, SessionId,
+    SessionStatus, SourceMetadata, SourcePath, TerminalSource, Timestamp,
 };
 use nix::{
     sys::socket::{getsockopt, sockopt::PeerCredentials},
@@ -44,8 +46,14 @@ use nix::{
 use signal_hook::consts::signal::{SIGINT, SIGTERM};
 use thiserror::Error;
 
-pub const DEFAULT_QUEUE_CAPACITY: usize = 64;
+use notifications::{
+    DEFAULT_NOTIFICATION_QUEUE_CAPACITY, FindingNotification, NotificationControl,
+    NotificationDispatcher,
+};
+
+pub const DEFAULT_QUEUE_CAPACITY: usize = 256;
 pub const DEFAULT_WORKER_COUNT: usize = 4;
+pub const DEFAULT_WORK_BATCH_SIZE: usize = 16;
 pub const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub const DEFAULT_CAPTURE_SOCKET: &str = "/run/ctf-hunter/capture.sock";
 const MAX_PREVIEW_TRANSFORMATIONS: usize = 12;
@@ -58,6 +66,7 @@ pub struct DaemonConfig {
     pub socket_path: PathBuf,
     pub queue_capacity: usize,
     pub worker_count: usize,
+    pub work_batch_size: usize,
     pub file_collector: FileCollectorConfig,
     pub capture_client: CaptureClientConfig,
 }
@@ -70,6 +79,7 @@ impl DaemonConfig {
             socket_path: socket_path.into(),
             queue_capacity: DEFAULT_QUEUE_CAPACITY,
             worker_count: DEFAULT_WORKER_COUNT,
+            work_batch_size: DEFAULT_WORK_BATCH_SIZE,
             file_collector: FileCollectorConfig::default(),
             capture_client: CaptureClientConfig::new(DEFAULT_CAPTURE_SOCKET),
         }
@@ -90,6 +100,8 @@ pub enum DaemonError {
     InvalidQueueCapacity,
     #[error("worker count must be greater than zero")]
     InvalidWorkerCount,
+    #[error("work batch size must be greater than zero")]
+    InvalidWorkBatchSize,
     #[error("runtime directory is not owned by the current user")]
     RuntimeDirectoryOwner,
     #[error("refusing to replace a non-socket path: {0}")]
@@ -117,6 +129,7 @@ struct Statistics {
     extracted_candidates: AtomicU64,
     decoded_candidates: AtomicU64,
     findings_detected: AtomicU64,
+    duplicate_events: AtomicU64,
 }
 
 impl Statistics {
@@ -127,6 +140,7 @@ impl Statistics {
         queue_capacity: usize,
         collector: FileCollectorStatistics,
         capture: CaptureClientStatistics,
+        notifications: notifications::NotificationMetrics,
     ) -> DaemonStatus {
         DaemonStatus {
             schema_version,
@@ -171,6 +185,14 @@ impl Statistics {
                 candidates_extracted: self.extracted_candidates.load(Ordering::Relaxed),
                 candidates_decoded: self.decoded_candidates.load(Ordering::Relaxed),
                 findings_detected: self.findings_detected.load(Ordering::Relaxed),
+                duplicate_events: self.duplicate_events.load(Ordering::Relaxed),
+            },
+            notifications: NotificationStatus {
+                queue_capacity: notifications.capacity,
+                queue_depth: notifications.depth,
+                delivered: notifications.delivered,
+                dropped: notifications.dropped,
+                errors: notifications.errors,
             },
         }
     }
@@ -190,6 +212,9 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
     if config.worker_count == 0 {
         return Err(DaemonError::InvalidWorkerCount);
     }
+    if config.work_batch_size == 0 {
+        return Err(DaemonError::InvalidWorkBatchSize);
+    }
     let database_directory = config.database_path.parent().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "database path has no parent")
     })?;
@@ -198,6 +223,7 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
     let schema_version = database.schema_version()?;
     let stored_watches = database.all_watch_directories()?;
     let stored_terminals = database.all_terminals()?;
+    let notification_settings = Arc::new(RwLock::new(database.notification_settings()?));
     fs::set_permissions(&config.database_path, fs::Permissions::from_mode(0o600))?;
     drop(database);
     let listener = bind_secure_socket(&config.socket_path)?;
@@ -205,6 +231,10 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
     listener.set_nonblocking(true)?;
 
     let statistics = Arc::new(Statistics::default());
+    let notification_dispatcher =
+        NotificationDispatcher::start(DEFAULT_NOTIFICATION_QUEUE_CAPACITY);
+    let notification_control = notification_dispatcher.control();
+    let recent_events = Arc::new(Mutex::new(RecentEvents::default()));
     let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
     let collector_sender = sender.clone();
     let collector_statistics = Arc::clone(&statistics);
@@ -270,6 +300,10 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
             schema_version,
             worker_count,
             queue_capacity,
+            work_batch_size: config.work_batch_size,
+            notification_settings: Arc::clone(&notification_settings),
+            notification_control: notification_control.clone(),
+            recent_events: Arc::clone(&recent_events),
         };
         workers.push(thread::spawn(move || {
             worker_loop(Database::open(worker_database_path)?, context)
@@ -316,6 +350,8 @@ pub fn run(config: DaemonConfig, terminating: Arc<AtomicBool>) -> Result<(), Dae
     for worker in workers {
         worker.join().map_err(|_| DaemonError::WorkerPanicked)??;
     }
+    drop(notification_control);
+    notification_dispatcher.shutdown();
     Ok(())
 }
 
@@ -323,6 +359,49 @@ enum Work {
     Client(std::os::unix::net::UnixStream),
     File(CollectedFile),
     Terminal(CollectedTerminalOutput),
+}
+
+const RECENT_EVENT_CAPACITY: usize = 4_096;
+const RECENT_EVENT_TTL: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+struct RecentEvents {
+    entries: HashMap<[u8; 32], Instant>,
+    order: VecDeque<([u8; 32], Instant)>,
+}
+
+impl RecentEvents {
+    fn is_duplicate(&mut self, event: &CaptureEvent, now: Instant) -> bool {
+        while self
+            .order
+            .front()
+            .is_some_and(|(_, inserted)| now.duration_since(*inserted) >= RECENT_EVENT_TTL)
+        {
+            if let Some((key, inserted)) = self.order.pop_front()
+                && self.entries.get(&key) == Some(&inserted)
+            {
+                self.entries.remove(&key);
+            }
+        }
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(event.session_id().to_string().as_bytes());
+        hasher.update(&serde_json::to_vec(event.source()).unwrap_or_default());
+        hasher.update(event.payload().as_bytes());
+        let key = *hasher.finalize().as_bytes();
+        if self.entries.contains_key(&key) {
+            return true;
+        }
+        self.entries.insert(key, now);
+        self.order.push_back((key, now));
+        while self.order.len() > RECENT_EVENT_CAPACITY {
+            if let Some((key, inserted)) = self.order.pop_front()
+                && self.entries.get(&key) == Some(&inserted)
+            {
+                self.entries.remove(&key);
+            }
+        }
+        false
+    }
 }
 
 fn enqueue_client(
@@ -397,6 +476,10 @@ struct WorkerContext {
     schema_version: usize,
     worker_count: usize,
     queue_capacity: usize,
+    work_batch_size: usize,
+    notification_settings: Arc<RwLock<NotificationSettings>>,
+    notification_control: NotificationControl,
+    recent_events: Arc<Mutex<RecentEvents>>,
 }
 
 fn worker_loop(database: Database, context: WorkerContext) -> Result<(), DaemonError> {
@@ -412,52 +495,72 @@ fn worker_loop(database: Database, context: WorkerContext) -> Result<(), DaemonE
         schema_version: context.schema_version,
         worker_count: context.worker_count,
         queue_capacity: context.queue_capacity,
+        notification_settings: context.notification_settings,
+        notification_control: context.notification_control,
+        recent_events: context.recent_events,
     };
     loop {
-        let received = context
-            .receiver
-            .lock()
-            .map_err(|_| DaemonError::WorkerStopped)?
-            .recv();
-        let Ok(work) = received else {
-            break;
+        let mut batch = Vec::with_capacity(context.work_batch_size);
+        let disconnected = {
+            let receiver = context
+                .receiver
+                .lock()
+                .map_err(|_| DaemonError::WorkerStopped)?;
+            match receiver.recv() {
+                Ok(work) => {
+                    batch.push(work);
+                    while batch.len() < context.work_batch_size {
+                        match receiver.try_recv() {
+                            Ok(work) => batch.push(work),
+                            Err(_) => break,
+                        }
+                    }
+                    false
+                }
+                Err(_) => true,
+            }
         };
+        if disconnected {
+            break;
+        }
         context
             .statistics
             .queue_depth
-            .fetch_sub(1, Ordering::Relaxed);
-        match work {
-            Work::Client(mut stream) => service.handle_connection(&mut stream),
-            Work::File(file) => match service.handle_file(file) {
-                Ok(true) => {
-                    context
-                        .statistics
-                        .analyzed_files
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-                Ok(false) => {}
-                Err(_) => {
-                    context
-                        .statistics
-                        .file_analysis_errors
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-            },
-            Work::Terminal(event) => match service.handle_terminal(event) {
-                Ok(true) => {
-                    context
-                        .statistics
-                        .analyzed_terminal_events
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-                Ok(false) => {}
-                Err(_) => {
-                    context
-                        .statistics
-                        .terminal_analysis_errors
-                        .fetch_add(1, Ordering::Relaxed);
-                }
-            },
+            .fetch_sub(batch.len(), Ordering::Relaxed);
+        for work in batch {
+            match work {
+                Work::Client(mut stream) => service.handle_connection(&mut stream),
+                Work::File(file) => match service.handle_file(file) {
+                    Ok(true) => {
+                        context
+                            .statistics
+                            .analyzed_files
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(false) => {}
+                    Err(_) => {
+                        context
+                            .statistics
+                            .file_analysis_errors
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+                Work::Terminal(event) => match service.handle_terminal(event) {
+                    Ok(true) => {
+                        context
+                            .statistics
+                            .analyzed_terminal_events
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(false) => {}
+                    Err(_) => {
+                        context
+                            .statistics
+                            .terminal_analysis_errors
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+            }
         }
     }
     Ok(())
@@ -475,6 +578,9 @@ struct Service {
     schema_version: usize,
     worker_count: usize,
     queue_capacity: usize,
+    notification_settings: Arc<RwLock<NotificationSettings>>,
+    notification_control: NotificationControl,
+    recent_events: Arc<Mutex<RecentEvents>>,
 }
 
 impl Service {
@@ -542,7 +648,25 @@ impl Service {
                 self.queue_capacity,
                 self.collector_metrics.snapshot(),
                 self.capture_metrics.snapshot(),
+                self.notification_control.metrics(),
             ))),
+            Request::GetNotificationSettings => {
+                let settings = *self
+                    .notification_settings
+                    .read()
+                    .map_err(|_| state_lock_error())?;
+                Ok(Response::NotificationSettings(settings))
+            }
+            Request::UpdateNotificationSettings { settings } => {
+                self.database
+                    .save_notification_settings(settings)
+                    .map_err(internal_error)?;
+                *self
+                    .notification_settings
+                    .write()
+                    .map_err(|_| state_lock_error())? = settings;
+                Ok(Response::NotificationSettings(settings))
+            }
             Request::ListSessions => Ok(Response::Sessions {
                 sessions: self.database.list_sessions().map_err(internal_error)?,
             }),
@@ -918,8 +1042,10 @@ impl Service {
 
     fn handle_file(&mut self, file: CollectedFile) -> Result<bool, (ErrorCode, String)> {
         let lock = Arc::clone(&self.session_state_lock);
-        let _guard = lock.lock().map_err(|_| state_lock_error())?;
-        let session = self.require_session(file.session_id)?;
+        let session = {
+            let _guard = lock.lock().map_err(|_| state_lock_error())?;
+            self.require_session(file.session_id)?
+        };
         if session.status() != SessionStatus::Monitoring {
             return Ok(false);
         }
@@ -941,8 +1067,10 @@ impl Service {
         output: CollectedTerminalOutput,
     ) -> Result<bool, (ErrorCode, String)> {
         let lock = Arc::clone(&self.session_state_lock);
-        let _guard = lock.lock().map_err(|_| state_lock_error())?;
-        let session = self.require_session(output.session_id)?;
+        let session = {
+            let _guard = lock.lock().map_err(|_| state_lock_error())?;
+            self.require_session(output.session_id)?
+        };
         if session.status() != SessionStatus::Monitoring {
             return Ok(false);
         }
@@ -1081,6 +1209,17 @@ impl Service {
         session: &Session,
         event: &CaptureEvent,
     ) -> Result<Vec<hunter_types::FindingId>, (ErrorCode, String)> {
+        if self
+            .recent_events
+            .lock()
+            .map_err(|_| state_lock_error())?
+            .is_duplicate(event, Instant::now())
+        {
+            self.statistics
+                .duplicate_events
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(Vec::new());
+        }
         let patterns = session
             .flag_patterns()
             .iter()
@@ -1091,10 +1230,22 @@ impl Service {
         let report = analyzer.analyze(event).map_err(internal_error)?;
         let analysis_statistics = report.statistics();
         let finding_count = report.findings().len();
-        let finding_ids = self
+        let stored_findings = self
             .database
-            .persist_analysis(event, &report)
+            .persist_analysis_with_outcomes(event, &report)
             .map_err(internal_error)?;
+        let settings = *self
+            .notification_settings
+            .read()
+            .map_err(|_| state_lock_error())?;
+        for (finding, stored) in report.findings().iter().zip(&stored_findings) {
+            if stored.created && settings.accepts(finding.confidence()) {
+                self.notification_control.try_send(FindingNotification {
+                    session: session.name().to_owned(),
+                    value: finding.value().as_str().to_owned(),
+                });
+            }
+        }
         self.statistics
             .analyzed_events
             .fetch_add(1, Ordering::Relaxed);
@@ -1109,7 +1260,10 @@ impl Service {
         self.statistics
             .findings_detected
             .fetch_add(usize_to_u64(finding_count), Ordering::Relaxed);
-        Ok(finding_ids)
+        Ok(stored_findings
+            .into_iter()
+            .map(|finding| finding.id)
+            .collect())
     }
 }
 
@@ -1366,6 +1520,7 @@ mod tests {
             64,
             FileCollectorStatistics::default(),
             CaptureClientStatistics::default(),
+            notifications::NotificationMetrics::default(),
         );
 
         assert_eq!(snapshot.schema_version, 3);
@@ -1373,5 +1528,55 @@ mod tests {
         assert_eq!(snapshot.rejected_connections, 3);
         assert_eq!(snapshot.worker_count, 4);
         assert_eq!(snapshot.queue_capacity, 64);
+    }
+
+    #[test]
+    fn recent_event_cache_deduplicates_and_remains_bounded() {
+        let session_id = SessionId::generate();
+        let event = CaptureEvent::new(
+            EventId::generate(),
+            session_id,
+            Timestamp::now(),
+            SourceMetadata::Manual,
+            EventPayload::new(b"FLAG{duplicate}".to_vec()).expect("payload"),
+        );
+        let now = Instant::now();
+        let mut cache = RecentEvents::default();
+        assert!(!cache.is_duplicate(&event, now));
+        assert!(cache.is_duplicate(&event, now));
+        for index in 0..RECENT_EVENT_CAPACITY + 64 {
+            let event = CaptureEvent::new(
+                EventId::generate(),
+                session_id,
+                Timestamp::now(),
+                SourceMetadata::Manual,
+                EventPayload::new(index.to_string().into_bytes()).expect("payload"),
+            );
+            cache.is_duplicate(&event, now);
+        }
+        assert!(cache.entries.len() <= RECENT_EVENT_CAPACITY);
+        assert!(cache.order.len() <= RECENT_EVENT_CAPACITY);
+        assert!(!cache.is_duplicate(&event, now + Duration::from_secs(3 * 60 * 60)));
+    }
+
+    #[test]
+    fn saturated_capture_queue_drops_immediately_instead_of_blocking_writer() {
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let statistics = Statistics::default();
+        let output = CollectedTerminalOutput {
+            session_id: SessionId::generate(),
+            terminal: PathBuf::from("/dev/pts/1"),
+            pid: 42,
+            uid: 1_000,
+            requested_len: 4,
+            truncated: false,
+            process_name: "test".to_owned(),
+            payload: b"test".to_vec(),
+        };
+        assert!(enqueue_terminal(&sender, output.clone(), &statistics));
+        let start = Instant::now();
+        assert!(!enqueue_terminal(&sender, output, &statistics));
+        assert!(start.elapsed() < Duration::from_millis(25));
+        assert_eq!(statistics.queue_depth.load(Ordering::Relaxed), 1);
     }
 }

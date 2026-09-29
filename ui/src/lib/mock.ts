@@ -4,6 +4,7 @@ import type {
   DaemonStatus,
   FindingDetail,
   FindingSummary,
+  NotificationSettings,
   Session,
   Sources,
 } from "./types";
@@ -117,7 +118,7 @@ let sources: Sources = {
 };
 
 const status: DaemonStatus = {
-  schema_version: 3,
+  schema_version: 4,
   worker_count: 4,
   queue_capacity: 64,
   queue_depth: 0,
@@ -159,8 +160,12 @@ const status: DaemonStatus = {
     candidates_extracted: 18_932,
     candidates_decoded: 3_712,
     findings_detected: 8,
+    duplicate_events: 31,
   },
+  notifications: { queue_capacity: 32, queue_depth: 0, delivered: 7, dropped: 0, errors: 0 },
 };
+
+let notificationSettings: NotificationSettings = { enabled: true, minimum_confidence: "high" };
 
 function decodePreview(text: string): AnalysisPreview {
   const isExample = text.trim() === "SFRCe2xheWVyX2J5X2xheWVyfQ==";
@@ -198,6 +203,15 @@ export const mockApi: Api = {
   async status() {
     await wait();
     return structuredClone(status);
+  },
+  async notificationSettings() {
+    await wait();
+    return structuredClone(notificationSettings);
+  },
+  async updateNotificationSettings(settings) {
+    await wait();
+    notificationSettings = { ...settings };
+    return structuredClone(notificationSettings);
   },
   async sessions() {
     await wait();

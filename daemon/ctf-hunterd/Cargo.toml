@@ -15,7 +15,9 @@ hunter-decoder = { path = "../../crates/hunter-decoder" }
 hunter-flags = { path = "../../crates/hunter-flags" }
 hunter-ipc = { path = "../../crates/hunter-ipc" }
 hunter-types = { path = "../../crates/hunter-types" }
+blake3.workspace = true
 nix.workspace = true
+notify-rust.workspace = true
 signal-hook.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
