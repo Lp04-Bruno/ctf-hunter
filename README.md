@@ -2,6 +2,16 @@
 
 CTF Hunter is a Linux-first application for passively finding CTF flags in terminal output, watched files, and manually submitted data.
 
+<p align="center">
+  <a href="docs/media/ctf-hunter-launch.mp4">
+    <img src="docs/media/ctf-hunter-launch-preview.webp" width="960" alt="CTF Hunter in 23 seconds: a terminal hides a gzip- and Base64-encoded flag, CTF Hunter watches terminals and folders, peels the blob layer by layer to HTB{layer_by_layer}, and shows the finding with its full transformation path." />
+  </a>
+</p>
+<p align="center">
+  <a href="docs/media/ctf-hunter-launch.mp4">Watch the 23-second film with sound (MP4)</a> ·
+  <a href="https://ctf-hunter.lennardpreusker.com/">ctf-hunter.lennardpreusker.com</a>
+</p>
+
 The project is in active development. The current implementation provides a bounded analysis engine, SQLite persistence, an unprivileged per-user daemon with versioned Unix-socket IPC, inotify-backed file collection, integrated read-tainted foreground-TTY capture, and a native Tauri and Svelte desktop interface. The capture service runs beside ordinary terminals without wrapping commands and forwards only kernel-filtered, bounded output to the daemon.
 
 ## Requirements
