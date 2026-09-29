@@ -51,6 +51,13 @@ the required fentry targets, and the `CAP_BPF` and `CAP_PERFMON` capability mode
 Unsupported capture prerequisites must produce an actionable diagnostic; they must
 not prevent file collection, manual analysis, or access to stored findings.
 
+Package configuration creates the `ctf-hunter` system group and starts the
+privileged system helper without selecting a desktop account. The packaged GUI
+starts its own unprivileged user daemon when required. Terminal capture remains a
+one-time, explicitly authorized opt-in: the fixed-purpose setup helper may add
+only the account identified by polkit, and a new login session activates that
+membership. Maintainer scripts never infer `$SUDO_USER` or edit a user's groups.
+
 The installed package must not require Rust, Cargo, a nightly toolchain, Node.js, npm,
 kernel headers, or a compiler. Runtime shared-library dependencies are derived from
 the final binaries during Debian packaging.

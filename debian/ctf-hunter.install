@@ -1,8 +1,9 @@
 target/release/ctf-hunterd usr/bin/
 target/release/ctf-hunterctl usr/bin/
 target/release/ctf-hunter-capture usr/libexec/
+target/release/ctf-hunter-enable-capture usr/libexec/
 packaging/systemd/ctf-hunter-capture.service usr/lib/systemd/system/
 packaging/systemd/ctf-hunterd.service usr/lib/systemd/user/
-packaging/sysusers/ctf-hunter.conf usr/lib/sysusers.d/
+packaging/polkit/dev.ctfhunter.enable-capture.policy usr/share/polkit-1/actions/
 packaging/desktop/dev.ctfhunter.desktop usr/share/applications/
 packaging/metainfo/dev.ctfhunter.desktop.metainfo.xml usr/share/metainfo/

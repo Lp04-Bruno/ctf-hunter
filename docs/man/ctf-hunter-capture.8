@@ -49,6 +49,10 @@ Run a time-bounded diagnostic capture for one UID and one or more terminals.
 .I /run/ctf-hunter/capture.sock
 Default production helper socket.
 .TP
+.I /usr/lib/sysusers.d/ctf-hunter.conf
+Declarative system-group definition. Membership grants access to the helper
+socket but does not bypass per-peer UID and terminal-ownership checks.
+.TP
 .I /sys/kernel/btf/vmlinux
 Running-kernel BTF metadata.
 .SH SEE ALSO

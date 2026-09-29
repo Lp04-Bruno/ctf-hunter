@@ -14,12 +14,14 @@ export npm_config_update_notifier = false
 
 override_dh_auto_configure:
 	python3 scripts/check-release-metadata.py
+	python3 scripts/verify-service-lifecycle.py
 
 override_dh_auto_build:
 	npm --prefix ui ci --offline --ignore-scripts
 	npm --prefix ui run build
 	cargo build --release --locked \
 		--package ctf-hunter-capture --bin ctf-hunter-capture \
+		--package ctf-hunter-setup --bin ctf-hunter-enable-capture \
 		--package ctf-hunterd --bins \
 		--package ctf-hunter-ui --bin ctf-hunter-ui
 	python3 scripts/verify-embedded-ebpf.py \
@@ -47,6 +49,13 @@ override_dh_install:
 
 override_dh_missing:
 	dh_missing --fail-missing
+
+override_dh_installsystemd:
+	dh_installsystemd --restart-after-upgrade ctf-hunter-capture.service
+
+override_dh_installsystemduser:
+	dh_installsystemduser ctf-hunterd.service
+	dh_installsysusers
 
 override_dh_auto_clean:
 	rm -rf ui/dist

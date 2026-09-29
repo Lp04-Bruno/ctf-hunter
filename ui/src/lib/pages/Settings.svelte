@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Bell, Eye, Monitor, Moon, ShieldCheck, Sun } from "@lucide/svelte";
-  import type { NotificationSettings, NotificationStatus } from "../types";
+  import SystemReadiness from "../components/SystemReadiness.svelte";
+  import type { NotificationSettings, NotificationStatus, RuntimeDiagnostics } from "../types";
 
   export let theme: "system" | "light" | "dark";
   export let refreshInterval: number;
@@ -8,12 +9,18 @@
   export let notificationSettings: NotificationSettings;
   export let notificationStatus: NotificationStatus | null;
   export let busy: boolean;
+  export let diagnostics: RuntimeDiagnostics | null;
+  export let diagnosticsBusy: boolean;
   export let onTheme: (theme: "system" | "light" | "dark") => void;
   export let onRefreshInterval: (seconds: number) => void;
   export let onNotificationSettings: (settings: NotificationSettings) => void;
+  export let onRefreshDiagnostics: () => void;
+  export let onEnableCapture: () => void;
 </script>
 
 <div class="settings-stack">
+  <SystemReadiness {diagnostics} busy={diagnosticsBusy} onRefresh={onRefreshDiagnostics} onEnableCapture={onEnableCapture} />
+
   <section class="surface settings-section">
     <div class="section-title"><Bell size={18} /><div><h2>Desktop notifications</h2><p>Delivered by the daemon even while this window is closed.</p></div></div>
     <label class="setting-row"><span><strong>Finding alerts</strong><small>Only newly discovered findings trigger an alert</small></span><input class="switch" type="checkbox" checked={notificationSettings.enabled} disabled={busy} onchange={(event) => onNotificationSettings({ ...notificationSettings, enabled: event.currentTarget.checked })} /></label>

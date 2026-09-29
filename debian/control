@@ -30,6 +30,7 @@ Architecture: amd64
 Depends:
  ${misc:Depends},
  ${shlibs:Depends},
+ pkexec,
  systemd
 Description: local-first CTF flag discovery desktop application
  CTF Hunter passively finds CTF flags in selected terminal output and watched

@@ -14,6 +14,7 @@ members = [
     "crates/hunter-parser",
     "crates/hunter-scoring",
     "crates/hunter-types",
+    "crates/ctf-hunter-setup",
     "daemon/ctf-hunterd",
     "ui/src-tauri",
 ]
@@ -30,6 +31,7 @@ default-members = [
     "crates/hunter-parser",
     "crates/hunter-scoring",
     "crates/hunter-types",
+    "crates/ctf-hunter-setup",
     "daemon/ctf-hunterd",
     "ui/src-tauri",
 ]

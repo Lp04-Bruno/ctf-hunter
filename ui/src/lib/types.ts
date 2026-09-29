@@ -175,3 +175,25 @@ export interface Submission {
   event_id: string;
   finding_ids: string[];
 }
+
+export type HealthStatus = "ready" | "attention" | "pending" | "unavailable";
+
+export interface HealthCheck {
+  status: HealthStatus;
+  title: string;
+  detail: string;
+  recovery_command: string | null;
+}
+
+export interface RuntimeDiagnostics {
+  user_daemon: HealthCheck;
+  capture_service: HealthCheck;
+  kernel_btf: HealthCheck;
+  terminal_access: HealthCheck;
+  group_exists: boolean;
+  account_in_group: boolean;
+  session_has_group: boolean;
+  requires_new_login: boolean;
+  setup_available: boolean;
+  terminal_capture_ready: boolean;
+}

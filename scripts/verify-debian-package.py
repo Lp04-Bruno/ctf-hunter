@@ -26,9 +26,11 @@ REQUIRED_MODES = {
     "./usr/bin/ctf-hunterctl": 0o755,
     "./usr/bin/ctf-hunterd": 0o755,
     "./usr/libexec/ctf-hunter-capture": 0o755,
+    "./usr/libexec/ctf-hunter-enable-capture": 0o755,
     "./usr/lib/systemd/system/ctf-hunter-capture.service": 0o644,
     "./usr/lib/systemd/user/ctf-hunterd.service": 0o644,
     "./usr/lib/sysusers.d/ctf-hunter.conf": 0o644,
+    "./usr/share/polkit-1/actions/dev.ctfhunter.enable-capture.policy": 0o644,
     "./usr/share/applications/dev.ctfhunter.desktop": 0o644,
     "./usr/share/man/man1/ctf-hunter.1.gz": 0o644,
     "./usr/share/man/man1/ctf-hunterctl.1.gz": 0o644,
@@ -67,7 +69,7 @@ def main() -> int:
     depends = field(package, "Depends")
     if not depends or "${" in depends:
         errors.append(f"unresolved or empty Depends field: {depends!r}")
-    for dependency in ("libc6", "libwebkit2gtk-4.1"):
+    for dependency in ("libc6", "libwebkit2gtk-4.1", "pkexec", "systemd"):
         if dependency not in depends:
             errors.append(f"dynamic dependency was not derived: {dependency}")
 
@@ -83,6 +85,13 @@ def main() -> int:
                 extracted = payload.extractfile(member)
                 if extracted is not None:
                     capture_payload = extracted.read()
+
+    sysusers = members.get("./usr/lib/sysusers.d/ctf-hunter.conf")
+    if sysusers is not None:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as payload:
+            extracted = payload.extractfile(sysusers)
+            if extracted is None or extracted.read() != b"g ctf-hunter - -\n":
+                errors.append("sysusers declaration does not create exactly the capture group")
 
     for path, expected_mode in REQUIRED_MODES.items():
         member = members.get(path)
@@ -112,6 +121,34 @@ def main() -> int:
 
     if capture_payload.count(b"\x7fELF") < 2:
         errors.append("packaged capture helper does not contain an embedded ELF payload")
+
+    control_archive = subprocess.run(
+        ["dpkg-deb", "--ctrl-tarfile", package], check=True, capture_output=True
+    ).stdout
+    control_files: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(control_archive), mode="r:") as control:
+        for member in control.getmembers():
+            if member.isfile():
+                extracted = control.extractfile(member)
+                if extracted is not None:
+                    control_files[member.name] = extracted.read()
+
+    postinst = control_files.get("./postinst", b"").decode(errors="replace")
+    if "systemd-sysusers" not in postinst or "ctf-hunter.conf" not in postinst:
+        errors.append("postinst does not integrate the ctf-hunter sysusers declaration")
+    for unit in ("ctf-hunter-capture.service", "ctf-hunterd.service"):
+        if unit not in postinst:
+            errors.append(f"postinst does not integrate {unit}")
+    if "SUDO_USER" in postinst or "usermod" in postinst:
+        errors.append("maintainer scripts must not infer or modify a desktop account")
+    for name in ("./postinst", "./prerm", "./postrm"):
+        script = control_files.get(name)
+        if script is None:
+            errors.append(f"generated maintainer script is missing: {name}")
+            continue
+        syntax = subprocess.run(["sh", "-n"], input=script, capture_output=True)
+        if syntax.returncode != 0:
+            errors.append(f"generated maintainer script has invalid shell syntax: {name}")
 
     if errors:
         print("Debian package validation failed:")

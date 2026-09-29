@@ -5,6 +5,7 @@ import type {
   FindingDetail,
   FindingSummary,
   NotificationSettings,
+  RuntimeDiagnostics,
   Session,
   Sources,
 } from "./types";
@@ -167,6 +168,59 @@ const status: DaemonStatus = {
 
 let notificationSettings: NotificationSettings = { enabled: true, minimum_confidence: "high" };
 
+const setupPreview =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("runtime") === "setup";
+
+let runtimeDiagnostics: RuntimeDiagnostics = {
+  user_daemon: {
+    status: "ready",
+    title: "Analysis daemon",
+    detail: "The private per-user socket is available.",
+    recovery_command: null,
+  },
+  capture_service: {
+    status: "ready",
+    title: "Capture helper",
+    detail: "The hardened system service is active with its limited capabilities.",
+    recovery_command: null,
+  },
+  kernel_btf: {
+    status: "ready",
+    title: "Kernel compatibility",
+    detail: "Kernel BTF and required terminal hooks are compatible.",
+    recovery_command: null,
+  },
+  terminal_access: {
+    status: "ready",
+    title: "Terminal access",
+    detail: "This login session can access the capture service.",
+    recovery_command: null,
+  },
+  group_exists: true,
+  account_in_group: true,
+  session_has_group: true,
+  requires_new_login: false,
+  setup_available: false,
+  terminal_capture_ready: true,
+};
+
+if (setupPreview) {
+  runtimeDiagnostics = {
+    ...runtimeDiagnostics,
+    terminal_access: {
+      status: "attention",
+      title: "Terminal access",
+      detail: "Terminal capture is off for this account. Enabling it requires one administrator confirmation.",
+      recovery_command: 'sudo usermod -aG ctf-hunter "$USER"',
+    },
+    account_in_group: false,
+    session_has_group: false,
+    setup_available: true,
+    terminal_capture_ready: false,
+  };
+}
+
 function decodePreview(text: string): AnalysisPreview {
   const isExample = text.trim() === "SFRCe2xheWVyX2J5X2xheWVyfQ==";
   return {
@@ -200,6 +254,31 @@ function decodePreview(text: string): AnalysisPreview {
 }
 
 export const mockApi: Api = {
+  async bootstrapRuntime() {
+    await wait();
+    return structuredClone(runtimeDiagnostics);
+  },
+  async runtimeDiagnostics() {
+    await wait();
+    return structuredClone(runtimeDiagnostics);
+  },
+  async enableTerminalCapture() {
+    await wait();
+    runtimeDiagnostics = {
+      ...runtimeDiagnostics,
+      terminal_access: {
+        status: "pending",
+        title: "Terminal access",
+        detail: "Access is enabled for your account. Sign out completely and sign back in once to activate it.",
+        recovery_command: null,
+      },
+      account_in_group: true,
+      requires_new_login: true,
+      setup_available: false,
+      terminal_capture_ready: false,
+    };
+    return structuredClone(runtimeDiagnostics);
+  },
   async status() {
     await wait();
     return structuredClone(status);

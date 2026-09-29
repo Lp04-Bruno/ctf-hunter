@@ -649,6 +649,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctf-hunter-setup"
+version = "0.1.0"
+dependencies = [
+ "nix",
+]
+
+[[package]]
 name = "ctf-hunter-ui"
 version = "0.1.0"
 dependencies = [

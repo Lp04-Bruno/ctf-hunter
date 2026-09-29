@@ -6,12 +6,16 @@ import type {
   FindingDetail,
   FindingSummary,
   NotificationSettings,
+  RuntimeDiagnostics,
   Session,
   Sources,
   Submission,
 } from "./types";
 
 export interface Api {
+  bootstrapRuntime(): Promise<RuntimeDiagnostics>;
+  runtimeDiagnostics(): Promise<RuntimeDiagnostics>;
+  enableTerminalCapture(): Promise<RuntimeDiagnostics>;
   status(): Promise<DaemonStatus>;
   notificationSettings(): Promise<NotificationSettings>;
   updateNotificationSettings(settings: NotificationSettings): Promise<NotificationSettings>;
@@ -29,6 +33,9 @@ export interface Api {
 }
 
 const tauriApi: Api = {
+  bootstrapRuntime: () => invoke("bootstrap_runtime"),
+  runtimeDiagnostics: () => invoke("runtime_diagnostics"),
+  enableTerminalCapture: () => invoke("enable_terminal_capture"),
   status: () => invoke("daemon_status"),
   notificationSettings: () => invoke("notification_settings"),
   updateNotificationSettings: (settings) => invoke("update_notification_settings", { settings }),

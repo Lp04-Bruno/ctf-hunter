@@ -24,6 +24,31 @@ cd ui && npm ci && npm run check && npm test && npm run build
 
 Development follows Git Flow: feature branches merge into `develop`, while `master` remains releasable.
 
+## Debian installation
+
+Install a downloaded package with APT so normal repository dependencies are resolved:
+
+```bash
+sudo apt install ./ctf-hunter_0.1.0-1_amd64.deb
+```
+
+The desktop application, decoder, file collection, database, and per-user daemon
+are available immediately. The application starts its packaged user service on
+first launch when necessary. Terminal capture is an explicit one-time opt-in
+because it connects to the capability-bound system helper. Open **Settings →
+System readiness**, select **Enable terminal capture**, approve the administrator
+dialog, then sign out of the Linux desktop and sign back in once.
+
+The equivalent recovery command is:
+
+```bash
+sudo usermod -aG ctf-hunter "$USER"
+```
+
+Package installation never guesses a `$SUDO_USER` or silently changes account
+memberships. Removing or purging the package never deletes data below
+`~/.local/share/ctf-hunter`.
+
 Release compatibility, versioning, and data-retention guarantees are documented in
 [`docs/release-policy.md`](docs/release-policy.md). Release metadata is validated with:
 
@@ -68,7 +93,7 @@ sudo -g "$(id -gn)" target/debug/ctf-hunter-capture serve --socket /run/ctf-hunt
 target/debug/ctf-hunterd --capture-socket /run/ctf-hunter/capture.sock
 ```
 
-The production units are in `packaging/systemd/`. The system helper is restricted to `CAP_BPF`, `CAP_PERFMON`, Unix sockets, and a hardened filesystem view. The per-user daemon remains unprivileged. Membership in the package-created `ctf-hunter` group grants access to the helper socket; add the intended desktop user to that group during installation and start a new login session before enabling capture. The helper still limits each client to terminals owned by its authenticated UID.
+The production units are in `packaging/systemd/`. The system helper is restricted to `CAP_BPF`, `CAP_PERFMON`, Unix sockets, and a hardened filesystem view. The per-user daemon remains unprivileged. Membership in the package-created `ctf-hunter` group grants access to the helper socket; the guided Settings action adds only the authenticated desktop account after explicit administrator approval. A new login session activates the membership. The helper still limits each client to terminals owned by its authenticated UID.
 
 ## License
 

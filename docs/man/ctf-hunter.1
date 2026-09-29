@@ -12,6 +12,12 @@ The application connects to the per-user
 .B ctf-hunterd
 Unix socket. Closing the window does not stop the daemon or the privileged
 capture helper.
+.PP
+On first packaged launch, the application starts the installed per-user daemon
+when necessary and reports service, kernel, and capture-access readiness in
+Settings. Terminal capture is enabled only after explicit administrator
+authorization. The resulting group membership requires one new login session;
+file and manual analysis do not require that membership.
 .SH ENVIRONMENT
 .TP
 .B CTF_HUNTER_SOCKET
@@ -21,6 +27,9 @@ Override the per-user daemon socket path. Normally the socket is
 .TP
 .I ~/.local/share/ctf-hunter/hunter.db
 Default per-user findings and session database.
+.TP
+.I /run/ctf-hunter/capture.sock
+Group-restricted privileged capture socket.
 .SH SEE ALSO
 .BR ctf-hunterd (1),
 .BR ctf-hunterctl (1),

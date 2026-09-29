@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { AlertCircle, CheckCircle2 } from "@lucide/svelte";
+  import { AlertCircle, CheckCircle2, ShieldAlert } from "@lucide/svelte";
   import { api, usesPreviewData } from "./lib/api";
   import Headerbar from "./lib/components/Headerbar.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
@@ -17,6 +17,7 @@
     FindingSummary,
     NotificationSettings,
     Page,
+    RuntimeDiagnostics,
     Session,
     Sources,
   } from "./lib/types";
@@ -39,8 +40,16 @@
   let refreshInterval = 15;
   let theme: "system" | "light" | "dark" = "system";
   let pollingTimer: ReturnType<typeof setInterval> | undefined;
+  let diagnostics: RuntimeDiagnostics | null = null;
+  let diagnosticsBusy = false;
 
   $: activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
+  $: runtimeNeedsAttention = diagnostics !== null && (
+    diagnostics.user_daemon.status !== "ready" ||
+    diagnostics.capture_service.status !== "ready" ||
+    diagnostics.kernel_btf.status !== "ready" ||
+    diagnostics.terminal_access.status !== "ready"
+  );
 
   function showToast(message: string) {
     toast = message;
@@ -229,12 +238,40 @@
     }
   }
 
+  async function refreshDiagnostics(bootstrap = false) {
+    if (diagnosticsBusy) return;
+    diagnosticsBusy = true;
+    try {
+      diagnostics = bootstrap ? await api.bootstrapRuntime() : await api.runtimeDiagnostics();
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      diagnosticsBusy = false;
+    }
+  }
+
+  async function enableCapture() {
+    if (diagnosticsBusy) return;
+    diagnosticsBusy = true;
+    try {
+      diagnostics = await api.enableTerminalCapture();
+      showToast(diagnostics.requires_new_login ? "Terminal capture enabled. Sign out once to activate it." : "Terminal capture enabled.");
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      diagnosticsBusy = false;
+    }
+  }
+
   onMount(() => {
     const savedTheme = localStorage.getItem("ctf-hunter-theme");
     if (savedTheme === "light" || savedTheme === "dark" || savedTheme === "system") applyTheme(savedTheme);
     const savedRefresh = Number(localStorage.getItem("ctf-hunter-refresh") ?? "15");
     applyRefreshInterval(Number.isFinite(savedRefresh) ? savedRefresh : 15);
-    void refresh(true);
+    void (async () => {
+      await refreshDiagnostics(true);
+      await refresh(true);
+    })();
     return () => {
       if (pollingTimer) clearInterval(pollingTimer);
     };
@@ -253,9 +290,18 @@
       onSelectSession={(id) => void selectSession(id)}
       onRefresh={() => void refresh()}
     />
-    {#if error}
-      <div class="error-banner"><AlertCircle size={16} /><span>{error}</span><button type="button" onclick={() => (error = "")}>Dismiss</button></div>
-    {/if}
+    <div class="banners">
+      {#if error}
+        <div class="error-banner"><AlertCircle size={16} /><span>{error}</span><button type="button" onclick={() => (error = "")}>Dismiss</button></div>
+      {/if}
+      {#if runtimeNeedsAttention && page !== "settings"}
+        <div class="runtime-banner">
+          <ShieldAlert size={16} />
+          <span>{diagnostics?.requires_new_login ? "Sign out and back in once to finish enabling terminal capture." : "System setup needs attention. File and manual analysis remain available when the daemon is running."}</span>
+          <button type="button" onclick={() => navigate("settings")}>Review setup</button>
+        </div>
+      {/if}
+    </div>
     <main>
       {#if page === "overview"}
         <Overview
@@ -295,9 +341,13 @@
           {notificationSettings}
           notificationStatus={status?.notifications ?? null}
           {busy}
+          {diagnostics}
+          {diagnosticsBusy}
           onTheme={applyTheme}
           onRefreshInterval={applyRefreshInterval}
           onNotificationSettings={(settings) => void saveNotificationSettings(settings)}
+          onRefreshDiagnostics={() => void refreshDiagnostics()}
+          onEnableCapture={() => void enableCapture()}
         />
       {/if}
     </main>
@@ -320,6 +370,8 @@
   .statusbar > span:last-child { display: flex; align-items: center; gap: 7px; }
   .statusbar .preview { color: var(--accent); }
   .error-banner button { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 0.74rem; font-weight: 700; }
+  .runtime-banner { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border)); background: var(--warning-soft); color: color-mix(in srgb, var(--warning) 78%, var(--text)); font-size: 0.79rem; }
+  .runtime-banner button { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 0.74rem; font-weight: 750; white-space: nowrap; }
   .toast { position: fixed; z-index: 60; right: 22px; bottom: 52px; display: flex; align-items: center; gap: 9px; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border)); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px rgb(15 24 33 / 18%); color: var(--success); font-size: 0.78rem; font-weight: 650; }
   @media (max-width: 759px) {
     .app-shell { display: block; }
