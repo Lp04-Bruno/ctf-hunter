@@ -89,8 +89,10 @@ const details = new Map<string, FindingDetail>(
           observed_at: summary.discovered_at,
           count: 1,
           source: sourceFor(index),
-          candidate_text:
+          root_candidate_text:
             index === 1 ? "SFRCe2xheWVyX2J5X2xheWVyfQ==" : `captured output containing ${summary.value}`,
+          candidate_text:
+            index === 1 ? "HTB{layer_by_layer}" : `captured output containing ${summary.value}`,
           candidate_original_length: 32,
           candidate_truncated: false,
           transformations:

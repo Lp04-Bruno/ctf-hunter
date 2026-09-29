@@ -124,6 +124,7 @@ export interface FindingOccurrence {
   observed_at: string;
   count: number;
   source: SourceMetadata;
+  root_candidate_text: string | null;
   candidate_text: string | null;
   candidate_original_length: number;
   candidate_truncated: boolean;
