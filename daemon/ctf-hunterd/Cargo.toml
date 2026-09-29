@@ -11,6 +11,7 @@ hunter-collectors = { path = "../../crates/hunter-collectors" }
 hunter-capture-protocol = { path = "../../crates/hunter-capture-protocol" }
 hunter-capture-client = { path = "../../crates/hunter-capture-client" }
 hunter-database = { path = "../../crates/hunter-database" }
+hunter-decoder = { path = "../../crates/hunter-decoder" }
 hunter-flags = { path = "../../crates/hunter-flags" }
 hunter-ipc = { path = "../../crates/hunter-ipc" }
 hunter-types = { path = "../../crates/hunter-types" }

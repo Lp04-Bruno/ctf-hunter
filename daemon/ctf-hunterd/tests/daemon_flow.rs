@@ -187,6 +187,10 @@ fn analyzes_queries_and_recovers_findings_after_restart() {
             assert_eq!(status.queue_capacity, 64);
             assert!(status.completed_requests >= 3);
             assert!(status.failed_requests >= 1);
+            assert_eq!(status.analysis.events_analyzed, 1);
+            assert!(status.analysis.candidates_extracted >= 1);
+            assert!(status.analysis.candidates_decoded >= 1);
+            assert_eq!(status.analysis.findings_detected, 1);
         }
         other => panic!("unexpected response: {other:?}"),
     }
@@ -206,10 +210,92 @@ fn analyzes_queries_and_recovers_findings_after_restart() {
             assert_eq!(findings.len(), 1);
             assert_eq!(findings[0].id, finding_id);
             assert_eq!(findings[0].value, "FLAG{persisted}");
+            assert_eq!(findings[0].source, Some(SourceMetadata::Manual));
         }
         other => panic!("unexpected response: {other:?}"),
     }
     shutdown(&config, restarted);
+}
+
+#[test]
+fn lists_edits_and_previews_sessions_without_persisting_preview_findings() {
+    let directory = tempdir().expect("tempdir");
+    let config = DaemonConfig::new(
+        directory.path().join("data/hunter.db"),
+        directory.path().join("runtime/daemon.sock"),
+    );
+    let daemon = start(config.clone());
+    let session = match request(
+        &config,
+        1,
+        Request::CreateSession {
+            name: "Draft".to_owned(),
+            flag_patterns: vec!["FLAG{*}".to_owned()],
+        },
+    ) {
+        Response::Session(session) => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+
+    let updated = match request(
+        &config,
+        2,
+        Request::UpdateSession {
+            session_id: session.id(),
+            name: "Autumn Finals".to_owned(),
+            flag_patterns: vec!["HTB{*}".to_owned()],
+        },
+    ) {
+        Response::Session(session) => session,
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert_eq!(updated.name(), "Autumn Finals");
+    assert_eq!(updated.flag_patterns(), ["HTB{*}"]);
+    match request(&config, 3, Request::ListSessions) {
+        Response::Sessions { sessions } => assert_eq!(sessions, vec![updated.clone()]),
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    match request(
+        &config,
+        4,
+        Request::PreviewText {
+            session_id: updated.id(),
+            text: "SFRCe2xheWVyX2J5X2xheWVyfQ==".to_owned(),
+        },
+    ) {
+        Response::AnalysisPreview(preview) => {
+            assert_eq!(preview.detections[0].format, "base64");
+            assert!(preview.detections[0].confidence >= 60);
+            assert!(
+                preview
+                    .transformations
+                    .iter()
+                    .any(|step| step.name == "base64" && step.output == "HTB{layer_by_layer}")
+            );
+            assert!(
+                preview
+                    .findings
+                    .iter()
+                    .any(|finding| finding.value == "HTB{layer_by_layer}")
+            );
+            assert!(preview.statistics.decoded_candidates >= 1);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+    match request(
+        &config,
+        5,
+        Request::ListFindings {
+            session_id: updated.id(),
+            offset: 0,
+            limit: 10,
+        },
+    ) {
+        Response::Findings { findings } => assert!(findings.is_empty()),
+        other => panic!("unexpected response: {other:?}"),
+    }
+    shutdown(&config, daemon);
 }
 
 #[test]

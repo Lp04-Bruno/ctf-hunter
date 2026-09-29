@@ -15,6 +15,7 @@ members = [
     "crates/hunter-scoring",
     "crates/hunter-types",
     "daemon/ctf-hunterd",
+    "ui/src-tauri",
 ]
 resolver = "3"
 default-members = [
@@ -30,6 +31,7 @@ default-members = [
     "crates/hunter-scoring",
     "crates/hunter-types",
     "daemon/ctf-hunterd",
+    "ui/src-tauri",
 ]
 
 [workspace.package]

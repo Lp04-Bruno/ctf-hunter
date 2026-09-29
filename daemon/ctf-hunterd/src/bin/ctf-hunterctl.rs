@@ -19,10 +19,21 @@ fn parse_args() -> Result<(PathBuf, Request), String> {
     let command = next(&mut args, "command")?;
     let request = match command.as_str() {
         "status" => Request::GetStatus,
+        "sessions" => Request::ListSessions,
         "create" => {
             let name = next(&mut args, "session name")?;
             let flag_patterns = args.collect();
             Request::CreateSession {
+                name,
+                flag_patterns,
+            }
+        }
+        "update" => {
+            let session_id = session_id(&mut args)?;
+            let name = next(&mut args, "session name")?;
+            let flag_patterns = args.collect();
+            Request::UpdateSession {
+                session_id,
                 name,
                 flag_patterns,
             }
@@ -65,6 +76,10 @@ fn parse_args() -> Result<(PathBuf, Request), String> {
             session_id: session_id(&mut args)?,
             text: next(&mut args, "text")?,
         },
+        "preview" => Request::PreviewText {
+            session_id: session_id(&mut args)?,
+            text: next(&mut args, "text")?,
+        },
         "list" => Request::ListFindings {
             session_id: session_id(&mut args)?,
             offset: 0,
@@ -93,5 +108,5 @@ fn next(args: &mut impl Iterator<Item = String>, name: &str) -> Result<String, S
 }
 
 const fn usage() -> &'static str {
-    "usage: ctf-hunterctl --socket PATH <status|create NAME [PATTERN...]|start ID|pause ID|resume ID|stop ID|add-watch ID DIR|remove-watch ID DIR|watches ID|add-terminal ID TTY|remove-terminal ID TTY|terminals ID|submit ID TEXT|list ID [LIMIT]|finding ID|shutdown>"
+    "usage: ctf-hunterctl --socket PATH <status|sessions|create NAME [PATTERN...]|update ID NAME [PATTERN...]|start ID|pause ID|resume ID|stop ID|add-watch ID DIR|remove-watch ID DIR|watches ID|add-terminal ID TTY|remove-terminal ID TTY|terminals ID|submit ID TEXT|preview ID TEXT|list ID [LIMIT]|finding ID|shutdown>"
 }

@@ -1,0 +1,27 @@
+[package]
+name = "ctf-hunter-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "ctf_hunter_ui"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "ctf-hunter-ui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7.0", features = [] }
+
+[dependencies]
+hunter-ipc = { path = "../../crates/hunter-ipc" }
+hunter-types = { path = "../../crates/hunter-types" }
+nix.workspace = true
+serde = { workspace = true }
+tauri = { version = "2.12.0", features = [] }
+
+[lints]
+workspace = true
