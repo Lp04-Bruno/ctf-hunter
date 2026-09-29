@@ -1485,6 +1485,7 @@ fn detail_from_database(value: hunter_database::FindingDetail) -> FindingDetail 
                 observed_at: occurrence.observed_at,
                 count: occurrence.count,
                 source: occurrence.source,
+                root_candidate_text: occurrence.root_candidate_text,
                 candidate_text: occurrence.candidate_text,
                 candidate_original_length: occurrence.candidate_original_length,
                 candidate_truncated: occurrence.candidate_truncated,

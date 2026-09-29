@@ -73,6 +73,7 @@ pub struct FindingOccurrence {
     pub observed_at: Timestamp,
     pub count: u64,
     pub source: SourceMetadata,
+    pub root_candidate_text: Option<String>,
     pub candidate_text: Option<String>,
     pub candidate_original_length: usize,
     pub candidate_truncated: bool,
@@ -644,6 +645,19 @@ impl Database {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let candidate_text = String::from_utf8(raw.candidate_data).ok();
+        let root_candidate_text = if let Some(first) = transformations.first() {
+            self.connection
+                .query_row(
+                    "SELECT data FROM candidates WHERE id = ?1",
+                    [first.input_candidate_id.to_string()],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()?
+                .and_then(|data| String::from_utf8(data).ok())
+        } else {
+            candidate_text.clone()
+        };
         Ok(FindingOccurrence {
             id: raw.id,
             source_event_id: parse_id(&raw.event_id, "event id")?,
@@ -655,7 +669,8 @@ impl Database {
                 value: raw.count.to_string(),
             })?,
             source: serde_json::from_str(&raw.source_json)?,
-            candidate_text: String::from_utf8(raw.candidate_data).ok(),
+            root_candidate_text,
+            candidate_text,
             candidate_original_length: usize::try_from(raw.candidate_original_length).map_err(
                 |_| DatabaseError::Corrupt {
                     field: "candidate original length",
@@ -1024,6 +1039,14 @@ mod tests {
         assert_eq!(detail.summary.value, "FLAG{persisted}");
         assert_eq!(detail.summary.occurrences, 1);
         assert_eq!(detail.occurrences[0].path.to_string(), "profile.payload");
+        assert_eq!(
+            detail.occurrences[0].root_candidate_text.as_deref(),
+            Some("RkxBR3twZXJzaXN0ZWR9")
+        );
+        assert_eq!(
+            detail.occurrences[0].candidate_text.as_deref(),
+            Some("FLAG{persisted}")
+        );
         assert_eq!(detail.occurrences[0].transformations.len(), 1);
         assert_eq!(detail.occurrences[0].transformations[0].name, "base64");
         assert!(!detail.occurrences_truncated);

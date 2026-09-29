@@ -211,6 +211,14 @@ fn analyzes_queries_and_recovers_findings_after_restart() {
         } => {
             assert_eq!(finding.summary.value, "FLAG{persisted}");
             assert_eq!(finding.occurrences[0].path.to_string(), "profile.payload");
+            assert_eq!(
+                finding.occurrences[0].root_candidate_text.as_deref(),
+                Some("RkxBR3twZXJzaXN0ZWR9")
+            );
+            assert_eq!(
+                finding.occurrences[0].candidate_text.as_deref(),
+                Some("FLAG{persisted}")
+            );
             assert_eq!(finding.occurrences[0].transformations[0].name, "base64");
         }
         other => panic!("unexpected response: {other:?}"),

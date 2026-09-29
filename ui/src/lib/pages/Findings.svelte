@@ -129,7 +129,7 @@
           <ol class="steps">
             <li>
               <span class="step-index">1</span>
-              <div><strong>Raw candidate</strong><code>{occurrence?.candidate_text ?? "Candidate data unavailable"}</code></div>
+              <div><strong>Raw candidate</strong><code>{occurrence?.root_candidate_text ?? occurrence?.candidate_text ?? "Candidate data unavailable"}</code></div>
             </li>
             {#each occurrence?.transformations ?? [] as transformation, index}
               <li>
