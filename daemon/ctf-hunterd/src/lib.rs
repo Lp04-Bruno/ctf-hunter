@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs, io,
     os::unix::{
         fs::FileTypeExt as _, fs::MetadataExt as _, fs::PermissionsExt as _, net::UnixListener,
@@ -24,11 +24,14 @@ use hunter_collectors::{
 };
 use hunter_core::{AnalysisConfig, Analyzer};
 use hunter_database::Database;
+use hunter_decoder::DecoderSet;
 use hunter_flags::FlagPattern;
 use hunter_ipc::{
-    CaptureStatus, DaemonStatus, ErrorCode, FileCollectorStatus, FindingDetail, FindingOccurrence,
-    FindingSummary, FrameError, IO_TIMEOUT, MAX_LIST_LIMIT, PROTOCOL_VERSION, Request,
-    RequestEnvelope, Response, ResponseEnvelope, TransformationStep, read_frame, write_frame,
+    AnalysisPreview, AnalysisStatus, CaptureStatus, DaemonStatus, ErrorCode, FileCollectorStatus,
+    FindingDetail, FindingOccurrence, FindingSummary, FrameError, IO_TIMEOUT, MAX_LIST_LIMIT,
+    PROTOCOL_VERSION, PreviewDetection, PreviewFinding, PreviewStatistics, PreviewTransformation,
+    Request, RequestEnvelope, Response, ResponseEnvelope, TransformationStep, read_frame,
+    write_frame,
 };
 use hunter_types::{
     CaptureEvent, EventId, EventPayload, FileSource, Session, SessionId, SessionStatus,
@@ -45,6 +48,9 @@ pub const DEFAULT_QUEUE_CAPACITY: usize = 64;
 pub const DEFAULT_WORKER_COUNT: usize = 4;
 pub const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub const DEFAULT_CAPTURE_SOCKET: &str = "/run/ctf-hunter/capture.sock";
+const MAX_PREVIEW_TRANSFORMATIONS: usize = 12;
+const MAX_PREVIEW_FINDINGS: usize = 16;
+const MAX_PREVIEW_TEXT_CHARS: usize = 2_048;
 
 #[derive(Clone, Debug)]
 pub struct DaemonConfig {
@@ -107,6 +113,10 @@ struct Statistics {
     file_analysis_errors: AtomicU64,
     analyzed_terminal_events: AtomicU64,
     terminal_analysis_errors: AtomicU64,
+    analyzed_events: AtomicU64,
+    extracted_candidates: AtomicU64,
+    decoded_candidates: AtomicU64,
+    findings_detected: AtomicU64,
 }
 
 impl Statistics {
@@ -155,6 +165,12 @@ impl Statistics {
                 ring_dropped: capture.ring_dropped,
                 read_failed: capture.read_failed,
                 fail_closed: capture.fail_closed,
+            },
+            analysis: AnalysisStatus {
+                events_analyzed: self.analyzed_events.load(Ordering::Relaxed),
+                candidates_extracted: self.extracted_candidates.load(Ordering::Relaxed),
+                candidates_decoded: self.decoded_candidates.load(Ordering::Relaxed),
+                findings_detected: self.findings_detected.load(Ordering::Relaxed),
             },
         }
     }
@@ -527,12 +543,41 @@ impl Service {
                 self.collector_metrics.snapshot(),
                 self.capture_metrics.snapshot(),
             ))),
+            Request::ListSessions => Ok(Response::Sessions {
+                sessions: self.database.list_sessions().map_err(internal_error)?,
+            }),
             Request::CreateSession {
                 name,
                 flag_patterns,
             } => {
                 let mut session = Session::new(SessionId::generate(), name, Timestamp::now())
                     .map_err(invalid_request)?;
+                session
+                    .set_flag_patterns(flag_patterns)
+                    .map_err(invalid_request)?;
+                self.database
+                    .save_session(&session)
+                    .map_err(internal_error)?;
+                Ok(Response::Session(session))
+            }
+            Request::UpdateSession {
+                session_id,
+                name,
+                flag_patterns,
+            } => {
+                let lock = Arc::clone(&self.session_state_lock);
+                let _guard = lock.lock().map_err(|_| state_lock_error())?;
+                let mut session = self.require_session(session_id)?;
+                if !matches!(
+                    session.status(),
+                    SessionStatus::Inactive | SessionStatus::Paused
+                ) {
+                    return Err((
+                        ErrorCode::InvalidState,
+                        "only inactive or paused sessions can be edited".to_owned(),
+                    ));
+                }
+                session.set_name(name).map_err(invalid_request)?;
                 session
                     .set_flag_patterns(flag_patterns)
                     .map_err(invalid_request)?;
@@ -606,6 +651,7 @@ impl Service {
                 let _guard = lock.lock().map_err(|_| state_lock_error())?;
                 self.submit_text(session_id, text)
             }
+            Request::PreviewText { session_id, text } => self.preview_text(session_id, text),
             Request::ListFindings {
                 session_id,
                 offset,
@@ -949,6 +995,87 @@ impl Service {
         })
     }
 
+    fn preview_text(
+        &self,
+        session_id: SessionId,
+        text: String,
+    ) -> Result<Response, (ErrorCode, String)> {
+        let session = self.require_session(session_id)?;
+        let payload = EventPayload::new(text.into_bytes()).map_err(invalid_request)?;
+        let detections = DecoderSet::new()
+            .detect(payload.as_bytes())
+            .into_iter()
+            .map(|detection| PreviewDetection {
+                format: detection.kind().id().to_owned(),
+                confidence: detection.score().value(),
+            })
+            .collect();
+        let event = CaptureEvent::new(
+            EventId::generate(),
+            session_id,
+            Timestamp::now(),
+            SourceMetadata::Manual,
+            payload,
+        );
+        let patterns = session
+            .flag_patterns()
+            .iter()
+            .cloned()
+            .map(FlagPattern::simple);
+        let analyzer =
+            Analyzer::new(AnalysisConfig::default(), patterns).map_err(internal_error)?;
+        let report = analyzer.analyze(&event).map_err(internal_error)?;
+        let candidate_text = report
+            .candidates()
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.id(),
+                    preview_text_value(candidate.data().as_bytes()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let transformations = report
+            .transformations()
+            .iter()
+            .take(MAX_PREVIEW_TRANSFORMATIONS)
+            .map(|transformation| PreviewTransformation {
+                name: transformation.name().as_str().to_owned(),
+                input: candidate_text
+                    .get(&transformation.input_candidate_id())
+                    .cloned()
+                    .unwrap_or_default(),
+                output: candidate_text
+                    .get(&transformation.output_candidate_id())
+                    .cloned()
+                    .unwrap_or_default(),
+            })
+            .collect();
+        let findings = report
+            .findings()
+            .iter()
+            .take(MAX_PREVIEW_FINDINGS)
+            .map(|finding| PreviewFinding {
+                value: preview_string(finding.value().as_str()),
+                confidence: finding.confidence(),
+                path: finding.path().clone(),
+            })
+            .collect();
+        let statistics = report.statistics();
+        Ok(Response::AnalysisPreview(AnalysisPreview {
+            normalized: preview_text_value(report.normalized()),
+            detections,
+            transformations,
+            findings,
+            statistics: PreviewStatistics {
+                extracted_occurrences: statistics.extracted_occurrences,
+                candidate_count: report.candidates().len(),
+                decoded_candidates: statistics.decoded_candidates,
+                decoder_attempts: statistics.decoder_attempts,
+            },
+        }))
+    }
+
     fn analyze_event(
         &mut self,
         session: &Session,
@@ -962,10 +1089,47 @@ impl Service {
         let analyzer =
             Analyzer::new(AnalysisConfig::default(), patterns).map_err(internal_error)?;
         let report = analyzer.analyze(event).map_err(internal_error)?;
-        self.database
+        let analysis_statistics = report.statistics();
+        let finding_count = report.findings().len();
+        let finding_ids = self
+            .database
             .persist_analysis(event, &report)
-            .map_err(internal_error)
+            .map_err(internal_error)?;
+        self.statistics
+            .analyzed_events
+            .fetch_add(1, Ordering::Relaxed);
+        self.statistics.extracted_candidates.fetch_add(
+            usize_to_u64(analysis_statistics.extracted_occurrences),
+            Ordering::Relaxed,
+        );
+        self.statistics.decoded_candidates.fetch_add(
+            usize_to_u64(analysis_statistics.decoded_candidates),
+            Ordering::Relaxed,
+        );
+        self.statistics
+            .findings_detected
+            .fetch_add(usize_to_u64(finding_count), Ordering::Relaxed);
+        Ok(finding_ids)
     }
+}
+
+fn preview_text_value(value: &[u8]) -> String {
+    preview_string(&String::from_utf8_lossy(value))
+}
+
+fn preview_string(value: &str) -> String {
+    let mut preview = value
+        .chars()
+        .take(MAX_PREVIEW_TEXT_CHARS)
+        .collect::<String>();
+    if value.chars().count() > MAX_PREVIEW_TEXT_CHARS {
+        preview.push('…');
+    }
+    preview
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 fn bind_secure_socket(path: &Path) -> Result<UnixListener, DaemonError> {
@@ -1149,6 +1313,7 @@ fn summary_from_database(value: hunter_database::FindingSummary) -> FindingSumma
         confidence: value.confidence,
         discovered_at: value.discovered_at,
         occurrences: value.occurrences,
+        source: value.source,
     }
 }
 

@@ -5,6 +5,7 @@ target/
 node_modules/
 dist/
 .svelte-kit/
+/ui/src-tauri/gen/
 
 # Local runtime data
 *.db

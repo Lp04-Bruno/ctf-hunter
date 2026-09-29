@@ -108,6 +108,13 @@ impl Session {
         &self.flag_patterns
     }
 
+    pub fn set_name(&mut self, name: impl Into<String>) -> Result<(), ValidationError> {
+        let name = name.into();
+        validate_text(&name, "session name", MAX_SESSION_NAME_BYTES)?;
+        self.name = name;
+        Ok(())
+    }
+
     pub fn set_flag_patterns(&mut self, flag_patterns: Vec<String>) -> Result<(), ValidationError> {
         validate_flag_patterns(&flag_patterns)?;
         self.flag_patterns = flag_patterns;
@@ -330,6 +337,17 @@ mod tests {
                 field: "flag patterns"
             })
         );
+    }
+
+    #[test]
+    fn session_name_can_be_changed_after_validation() {
+        let mut session = Session::new(SessionId::generate(), "Local Lab", timestamp(100))
+            .expect("valid session");
+
+        session.set_name("Autumn Finals").expect("valid name");
+        assert_eq!(session.name(), "Autumn Finals");
+        assert!(session.set_name("   ").is_err());
+        assert_eq!(session.name(), "Autumn Finals");
     }
 
     #[test]

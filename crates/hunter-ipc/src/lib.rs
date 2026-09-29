@@ -39,7 +39,13 @@ impl RequestEnvelope {
 #[serde(rename_all = "snake_case", tag = "operation")]
 pub enum Request {
     GetStatus,
+    ListSessions,
     CreateSession {
+        name: String,
+        flag_patterns: Vec<String>,
+    },
+    UpdateSession {
+        session_id: SessionId,
         name: String,
         flag_patterns: Vec<String>,
     },
@@ -78,6 +84,10 @@ pub enum Request {
         session_id: SessionId,
     },
     SubmitText {
+        session_id: SessionId,
+        text: String,
+    },
+    PreviewText {
         session_id: SessionId,
         text: String,
     },
@@ -125,6 +135,9 @@ impl ResponseEnvelope {
 #[serde(rename_all = "snake_case", tag = "result")]
 pub enum Response {
     Status(DaemonStatus),
+    Sessions {
+        sessions: Vec<Session>,
+    },
     Session(Session),
     WatchDirectories {
         session_id: SessionId,
@@ -138,6 +151,7 @@ pub enum Response {
         event_id: EventId,
         finding_ids: Vec<FindingId>,
     },
+    AnalysisPreview(AnalysisPreview),
     Findings {
         findings: Vec<FindingSummary>,
     },
@@ -176,6 +190,15 @@ pub struct DaemonStatus {
     pub failed_requests: u64,
     pub file_collector: FileCollectorStatus,
     pub capture: CaptureStatus,
+    pub analysis: AnalysisStatus,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisStatus {
+    pub events_analyzed: u64,
+    pub candidates_extracted: u64,
+    pub candidates_decoded: u64,
+    pub findings_detected: u64,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -212,6 +235,43 @@ pub struct CaptureStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisPreview {
+    pub normalized: String,
+    pub detections: Vec<PreviewDetection>,
+    pub transformations: Vec<PreviewTransformation>,
+    pub findings: Vec<PreviewFinding>,
+    pub statistics: PreviewStatistics,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PreviewDetection {
+    pub format: String,
+    pub confidence: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PreviewTransformation {
+    pub name: String,
+    pub input: String,
+    pub output: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PreviewFinding {
+    pub value: String,
+    pub confidence: Confidence,
+    pub path: CandidatePath,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PreviewStatistics {
+    pub extracted_occurrences: usize,
+    pub candidate_count: usize,
+    pub decoded_candidates: usize,
+    pub decoder_attempts: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FindingSummary {
     pub id: FindingId,
     pub session_id: SessionId,
@@ -219,6 +279,7 @@ pub struct FindingSummary {
     pub confidence: Confidence,
     pub discovered_at: Timestamp,
     pub occurrences: u64,
+    pub source: Option<SourceMetadata>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

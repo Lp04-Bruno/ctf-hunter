@@ -45,6 +45,7 @@ pub struct FindingSummary {
     pub confidence: Confidence,
     pub discovered_at: Timestamp,
     pub occurrences: u64,
+    pub source: Option<SourceMetadata>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -194,6 +195,26 @@ impl Database {
             "flag_patterns": patterns,
         });
         Ok(Some(serde_json::from_value(value)?))
+    }
+
+    pub fn list_sessions(&self) -> Result<Vec<Session>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM sessions ORDER BY created_at DESC, id DESC")?;
+        let raw_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+
+        raw_ids
+            .into_iter()
+            .map(|raw_id| {
+                let id = parse_id(&raw_id, "session id")?;
+                self.get_session(id)?.ok_or(DatabaseError::Invariant(
+                    "session disappeared while listing sessions",
+                ))
+            })
+            .collect()
     }
 
     pub fn add_watch_directory(&self, session_id: SessionId, directory: &Path) -> Result<bool> {
@@ -436,7 +457,12 @@ impl Database {
         }
         let mut statement = self.connection.prepare(
             "SELECT f.id, f.session_id, f.value, f.confidence, f.discovered_at,
-                    COALESCE(SUM(o.occurrence_count), 0)
+                    COALESCE(SUM(o.occurrence_count), 0),
+                    (SELECT e.source_json
+                     FROM finding_occurrences latest
+                     JOIN source_events e ON e.id = latest.source_event_id
+                     WHERE latest.finding_id = f.id
+                     ORDER BY latest.id DESC LIMIT 1)
              FROM findings f
              LEFT JOIN finding_occurrences o ON o.finding_id = f.id
              WHERE f.session_id = ?1
@@ -459,6 +485,7 @@ impl Database {
                         confidence: row.get(3)?,
                         discovered_at: row.get(4)?,
                         occurrences: row.get(5)?,
+                        source_json: row.get(6)?,
                     })
                 },
             )?
@@ -471,7 +498,12 @@ impl Database {
             .connection
             .query_row(
                 "SELECT f.id, f.session_id, f.value, f.confidence, f.discovered_at,
-                        COALESCE(SUM(o.occurrence_count), 0)
+                        COALESCE(SUM(o.occurrence_count), 0),
+                        (SELECT e.source_json
+                         FROM finding_occurrences latest
+                         JOIN source_events e ON e.id = latest.source_event_id
+                         WHERE latest.finding_id = f.id
+                         ORDER BY latest.id DESC LIMIT 1)
                  FROM findings f
                  LEFT JOIN finding_occurrences o ON o.finding_id = f.id
                  WHERE f.id = ?1 GROUP BY f.id",
@@ -484,6 +516,7 @@ impl Database {
                         confidence: row.get(3)?,
                         discovered_at: row.get(4)?,
                         occurrences: row.get(5)?,
+                        source_json: row.get(6)?,
                     })
                 },
             )
@@ -680,6 +713,7 @@ struct RawFindingSummary {
     confidence: String,
     discovered_at: String,
     occurrences: i64,
+    source_json: Option<String>,
 }
 
 fn parse_summary(raw: RawFindingSummary) -> Result<FindingSummary> {
@@ -693,6 +727,10 @@ fn parse_summary(raw: RawFindingSummary) -> Result<FindingSummary> {
             field: "finding occurrence count",
             value: raw.occurrences.to_string(),
         })?,
+        source: raw
+            .source_json
+            .map(|value| serde_json::from_str(&value))
+            .transpose()?,
     })
 }
 
@@ -828,6 +866,33 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()
             .expect("columns");
         assert!(!columns.iter().any(|column| column == "payload"));
+    }
+
+    #[test]
+    fn lists_sessions_newest_first_with_patterns() {
+        let directory = tempdir().expect("tempdir");
+        let mut database = Database::open(directory.path().join("hunter.db")).expect("database");
+        let mut older = Session::new(
+            SessionId::generate(),
+            "Older",
+            Timestamp::from_unix_timestamp(1_800_000_000).expect("timestamp"),
+        )
+        .expect("session");
+        older
+            .set_flag_patterns(vec!["OLD{*}".to_owned()])
+            .expect("patterns");
+        let newer = Session::new(
+            SessionId::generate(),
+            "Newer",
+            Timestamp::from_unix_timestamp(1_800_000_100).expect("timestamp"),
+        )
+        .expect("session");
+        database.save_session(&older).expect("save older");
+        database.save_session(&newer).expect("save newer");
+
+        let sessions = database.list_sessions().expect("list sessions");
+
+        assert_eq!(sessions, vec![newer, older]);
     }
 
     #[test]
