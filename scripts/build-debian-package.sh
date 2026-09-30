@@ -2,7 +2,8 @@
 set -eu
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-artifact_dir="$project_root/artifacts"
+: "${ARTIFACT_DIR:=$project_root/artifacts}"
+artifact_dir=$ARTIFACT_DIR
 package_name=$(python3 -c 'import pathlib, sys, tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text())["package_name"])' "$project_root/release/metadata.toml")
 debian_version=$(dpkg-parsechangelog -l"$project_root/debian/changelog" -S Version)
 architecture=$(dpkg-architecture -qDEB_HOST_ARCH)
@@ -28,16 +29,32 @@ rsync -a \
     --exclude '/ui/node_modules/' \
     "$project_root/" "$source_dir/"
 
-if git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1; then
-    source_date_epoch=$(git -C "$project_root" log -1 --format=%ct)
-elif test -d "$project_root/.git-data"; then
-    source_date_epoch=$(git --git-dir="$project_root/.git-data" \
-        --work-tree="$project_root" log -1 --format=%ct)
-else
-    changelog_date=$(dpkg-parsechangelog -l"$project_root/debian/changelog" -S Date)
-    source_date_epoch=$(date --date="$changelog_date" +%s)
+if test -z "${SOURCE_DATE_EPOCH:-}"; then
+    if git -C "$project_root" rev-parse --git-dir >/dev/null 2>&1; then
+        SOURCE_DATE_EPOCH=$(git -C "$project_root" log -1 --format=%ct)
+    elif test -d "$project_root/.git-data"; then
+        SOURCE_DATE_EPOCH=$(git --git-dir="$project_root/.git-data" \
+            --work-tree="$project_root" log -1 --format=%ct)
+    else
+        changelog_date=$(dpkg-parsechangelog -l"$project_root/debian/changelog" -S Date)
+        SOURCE_DATE_EPOCH=$(date --date="$changelog_date" +%s)
+    fi
 fi
-export SOURCE_DATE_EPOCH="$source_date_epoch"
+export SOURCE_DATE_EPOCH
+: "${CTF_HUNTER_EBPF_TOOLCHAIN:=nightly-2026-09-19}"
+export CTF_HUNTER_EBPF_TOOLCHAIN
+: "${TZ:=UTC}"
+export TZ
+: "${LC_ALL:=C.UTF-8}"
+export LC_ALL
+: "${LANG:=C.UTF-8}"
+export LANG
+export CARGO_INCREMENTAL=0
+canonical_source="/usr/src/$package_name-${debian_version%-*}"
+: "${RUSTFLAGS:=}"
+RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$source_dir=$canonical_source"
+export RUSTFLAGS
+umask 022
 : "${DEB_BUILD_OPTIONS:=nocheck}"
 export DEB_BUILD_OPTIONS
 

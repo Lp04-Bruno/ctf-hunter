@@ -1,0 +1,39 @@
+.TH CTF-HUNTER-ENABLE-CAPTURE 8 "September 2026" "CTF Hunter 0.1.0" "System Administration"
+.SH NAME
+ctf-hunter-enable-capture \- authorize terminal capture for one desktop account
+.SH SYNOPSIS
+.B pkexec /usr/libexec/ctf-hunter-enable-capture
+.SH DESCRIPTION
+.B ctf-hunter-enable-capture
+is the fixed-purpose administrative helper used by the CTF Hunter desktop
+application. It adds the account identified by
+.B PKEXEC_UID
+to the
+.B ctf-hunter
+system group after PolicyKit administrator authorization.
+.PP
+The helper accepts no command-line arguments, rejects direct unprivileged use,
+does not infer an account from
+.B SUDO_USER
+and performs no service or filesystem changes. A new login session is required
+before the supplementary group membership becomes active.
+.SH ENVIRONMENT
+.TP
+.B PKEXEC_UID
+Numeric UID supplied by
+.BR pkexec (1).
+Root and malformed values are rejected.
+.SH FILES
+.TP
+.I /usr/lib/sysusers.d/ctf-hunter.conf
+Declarative definition of the
+.B ctf-hunter
+system group.
+.TP
+.I /usr/share/polkit-1/actions/dev.ctfhunter.enable-capture.policy
+PolicyKit action restricting execution to this installed helper.
+.SH SEE ALSO
+.BR ctf-hunter (1),
+.BR ctf-hunter-capture (8),
+.BR pkexec (1),
+.BR usermod (8)

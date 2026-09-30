@@ -3,6 +3,7 @@ Section: utils
 Priority: optional
 Maintainer: Lp04-Bruno <88251364+lp04-Bruno@users.noreply.github.com>
 Build-Depends:
+ cargo,
  debhelper-compat (= 13),
  file,
  imagemagick,
@@ -14,11 +15,10 @@ Build-Depends:
  libwebkit2gtk-4.1-dev,
  libxdo-dev,
  llvm,
- nodejs (>= 20),
- npm (>= 10),
+ nodejs,
  pkg-config,
  python3,
- rustup
+ rustc
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
 Homepage: https://github.com/Lp04-Bruno/ctf-hunter

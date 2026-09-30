@@ -27,7 +27,7 @@ REQUIRED_MODES = {
     "./usr/bin/ctf-hunterd": 0o755,
     "./usr/libexec/ctf-hunter-capture": 0o755,
     "./usr/libexec/ctf-hunter-enable-capture": 0o755,
-    "./usr/lib/systemd/system/ctf-hunter-capture.service": 0o644,
+    "./lib/systemd/system/ctf-hunter-capture.service": 0o644,
     "./usr/lib/systemd/user/ctf-hunterd.service": 0o644,
     "./usr/lib/sysusers.d/ctf-hunter.conf": 0o644,
     "./usr/share/polkit-1/actions/dev.ctfhunter.enable-capture.policy": 0o644,
@@ -36,6 +36,7 @@ REQUIRED_MODES = {
     "./usr/share/man/man1/ctf-hunterctl.1.gz": 0o644,
     "./usr/share/man/man1/ctf-hunterd.1.gz": 0o644,
     "./usr/share/man/man8/ctf-hunter-capture.8.gz": 0o644,
+    "./usr/share/man/man8/ctf-hunter-enable-capture.8.gz": 0o644,
     "./usr/share/metainfo/dev.ctfhunter.desktop.metainfo.xml": 0o644,
 }
 

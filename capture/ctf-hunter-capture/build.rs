@@ -2,6 +2,12 @@ use anyhow::{Context as _, anyhow};
 use aya_build::Toolchain;
 
 fn main() -> anyhow::Result<()> {
+    const TOOLCHAIN_ENV: &str = "CTF_HUNTER_EBPF_TOOLCHAIN";
+    println!("cargo:rerun-if-env-changed={TOOLCHAIN_ENV}");
+    let configured_toolchain = std::env::var(TOOLCHAIN_ENV).ok();
+    let toolchain = configured_toolchain
+        .as_deref()
+        .map_or_else(Toolchain::default, Toolchain::Custom);
     let cargo_metadata::Metadata { packages, .. } = cargo_metadata::MetadataCommand::new()
         .no_deps()
         .exec()
@@ -20,6 +26,6 @@ fn main() -> anyhow::Result<()> {
             root_dir: root_dir.as_str(),
             ..Default::default()
         }],
-        Toolchain::default(),
+        toolchain,
     )
 }

@@ -106,3 +106,71 @@ The tag signing identity is Lp04-Bruno
 <88251364+lp04-Bruno@users.noreply.github.com>. A signing key must be configured
 before the tag is created. Private signing material is never stored in the repository,
 workflow artifacts, or local project notes.
+
+## Reproducible build contract
+
+Release packages are built only through the pinned Debian 12 Bookworm container.
+`release/build-environment.env` fixes the container image digest, Rust stable and
+nightly toolchains, Node.js, npm, and `bpf-linker`; `Cargo.lock` and
+`ui/package-lock.json` fix application dependencies. The build additionally fixes
+`SOURCE_DATE_EPOCH`, UTC, the C.UTF-8 locale, the umask, source paths, and Cargo's
+incremental-build behavior.
+
+The standard local release verification is:
+
+```bash
+scripts/build-release-container.sh
+scripts/verify-reproducible-build.sh
+scripts/test-package-lifecycle.sh artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+scripts/test-btf-failures.sh artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+```
+
+The reproducibility gate compares both the main and detached-debug Debian packages
+byte for byte. On a mismatch it retains a `diffoscope` HTML report below the ignored
+`artifacts/reproducible/` directory. The additional `reprotest` wrapper perturbs the
+outer environment, build path, timezone, locale, umask, and file ordering:
+
+```bash
+scripts/reprotest-release.sh
+```
+
+## Package lifecycle verification
+
+The disposable lifecycle matrix installs the package with APT on Debian 12 and Kali
+Rolling. It covers repeated installation, explicit and idempotent capture-group
+enrollment, daemon restart and database recovery without optional desktop services,
+same-schema downgrade and upgrade, remove, purge, reinstallation, retained user data,
+and a native GUI smoke test. Separate tests exercise missing and malformed kernel BTF.
+
+Two host-authorized checks intentionally remain outside rootless containers because
+they require a real systemd instance or the host kernel's eBPF verifier:
+
+```bash
+sudo scripts/test-package-systemd.sh artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+sudo scripts/test-packaged-capture.exp artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+```
+
+## Artifact verification and signing
+
+`scripts/create-release-artifacts.sh` creates a deterministic SPDX 2.3 SBOM and a
+sorted SHA-256 manifest for the exact Debian outputs. The SBOM binds the main package
+digest to its Cargo, npm, Debian runtime dependencies, and installed-file hashes.
+`scripts/verify-release-artifacts.py` independently checks that binding and every
+manifest entry.
+
+An actual release must set `CTF_HUNTER_SIGNING_KEY` to the dedicated OpenPGP signing
+key and `REQUIRE_SIGNATURE=1`; an unsigned manifest is accepted only for local
+pre-release validation:
+
+```bash
+CTF_HUNTER_SIGNING_KEY=<fingerprint> REQUIRE_SIGNATURE=1 \
+  scripts/create-release-artifacts.sh artifacts/reproducible/build-a
+python3 scripts/verify-release-artifacts.py \
+  --require-signature artifacts/reproducible/build-a
+```
+
+The signed source tag and public artifact attestation are publication operations.
+They are generated from the immutable `master` release commit by the protected Phase
+10F workflow, never from a mutable local worktree. The GitHub Release and future APT
+repository must publish the same byte-identical `.deb` covered by the manifest, SBOM,
+signature, and attestation.
