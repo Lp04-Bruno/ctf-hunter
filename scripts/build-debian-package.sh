@@ -8,7 +8,16 @@ package_name=$(python3 -c 'import pathlib, sys, tomllib; print(tomllib.loads(pat
 debian_version=$(dpkg-parsechangelog -l"$project_root/debian/changelog" -S Version)
 architecture=$(dpkg-architecture -qDEB_HOST_ARCH)
 mkdir -p "$artifact_dir"
-build_root=$(mktemp -d "$artifact_dir/.build.XXXXXX")
+if test -n "${CTF_HUNTER_BUILD_ROOT:-}"; then
+    case "$CTF_HUNTER_BUILD_ROOT" in
+        /build/*) build_root=$CTF_HUNTER_BUILD_ROOT ;;
+        *) echo "CTF_HUNTER_BUILD_ROOT must be below /build" >&2; exit 1 ;;
+    esac
+    rm -rf -- "$build_root"
+    mkdir -p "$build_root"
+else
+    build_root=$(mktemp -d "$artifact_dir/.build.XXXXXX")
+fi
 source_dir="$build_root/$package_name-${debian_version%-*}"
 
 cleanup() {

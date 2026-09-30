@@ -114,7 +114,9 @@ Release packages are built only through the pinned Debian 12 Bookworm container.
 nightly toolchains, Node.js, npm, and `bpf-linker`; `Cargo.lock` and
 `ui/package-lock.json` fix application dependencies. The build additionally fixes
 `SOURCE_DATE_EPOCH`, UTC, the C.UTF-8 locale, the umask, source paths, and Cargo's
-incremental-build behavior.
+incremental-build behavior. Compilation happens below the fixed ephemeral path
+`/build/ctf-hunter-package`; this also normalizes paths embedded by nested eBPF and
+Tauri builds that replace Cargo's outer Rust flags.
 
 The standard local release verification is:
 

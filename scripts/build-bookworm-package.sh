@@ -33,6 +33,7 @@ log_file="$artifact_dir/build.log"
     "$CTF_HUNTER_BUILD_IMAGE" \
     bash -o errexit -o nounset -o pipefail -c '
         rm -rf /build/source
+        rm -rf /build/ctf-hunter-package
         mkdir -p /build/source
         rsync -a \
             --exclude /.git/ \
@@ -54,6 +55,7 @@ log_file="$artifact_dir/build.log"
         npm --prefix ui ci --ignore-scripts
         rm -rf ui/node_modules
         ARTIFACT_DIR="/workspace/artifacts/$ARTIFACT_SUBDIRECTORY" \
+            CTF_HUNTER_BUILD_ROOT=/build/ctf-hunter-package \
             scripts/build-debian-package.sh
         lintian --profile debian --pedantic \
             "/workspace/artifacts/$ARTIFACT_SUBDIRECTORY/ctf-hunter_0.1.0-1_amd64.changes"
