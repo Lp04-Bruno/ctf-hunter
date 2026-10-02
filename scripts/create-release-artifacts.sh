@@ -5,6 +5,7 @@ project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 artifact_dir=${1:-$project_root/artifacts/bookworm}
 require_signature=${REQUIRE_SIGNATURE:-0}
 signing_key=${CTF_HUNTER_SIGNING_KEY:-}
+signing_passphrase_file=${CTF_HUNTER_SIGNING_PASSPHRASE_FILE:-}
 
 artifact_dir=$(realpath "$artifact_dir")
 package=$artifact_dir/ctf-hunter_0.1.0-1_amd64.deb
@@ -32,7 +33,15 @@ python3 "$project_root/scripts/generate-spdx-sbom.py" "$package" "$sbom"
 
 rm -f "$artifact_dir/SHA256SUMS.asc"
 if test -n "$signing_key"; then
-    gpg --batch --yes --local-user "$signing_key" \
+    gpg_arguments=(--batch --yes --local-user "$signing_key")
+    if test -n "$signing_passphrase_file"; then
+        test -f "$signing_passphrase_file" || {
+            echo "signing passphrase file not found" >&2
+            exit 1
+        }
+        gpg_arguments+=(--pinentry-mode loopback --passphrase-file "$signing_passphrase_file")
+    fi
+    gpg "${gpg_arguments[@]}" \
         --armor --detach-sign \
         --output "$artifact_dir/SHA256SUMS.asc" \
         "$artifact_dir/SHA256SUMS"

@@ -122,6 +122,9 @@ def main() -> int:
         apt_url = metadata.get("apt_repository_url", "")
         if not apt_url.startswith("https://"):
             errors.append("enabled APT publishing requires an HTTPS apt_repository_url")
+        for field in ("apt_repository_origin", "apt_repository_label"):
+            if not str(metadata.get(field, "")).strip():
+                errors.append(f"enabled APT publishing requires {field}")
 
     if shutil.which("dpkg") is None:
         errors.append("dpkg is required to validate Debian version ordering")

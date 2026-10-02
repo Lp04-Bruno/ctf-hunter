@@ -60,10 +60,14 @@ memberships. Removing or purging the package never deletes data below
 `~/.local/share/ctf-hunter`.
 
 Release compatibility, versioning, and data-retention guarantees are documented in
-[`docs/release-policy.md`](docs/release-policy.md). Release metadata is validated with:
+[`docs/release-policy.md`](docs/release-policy.md). The permission-separated CI,
+signing, draft-release, and APT-promotion process is documented in
+[`docs/release-automation.md`](docs/release-automation.md). Release metadata is
+validated with:
 
 ```bash
 python3 scripts/check-release-metadata.py
+python3 scripts/verify-workflows.py
 ```
 
 ## Daemon

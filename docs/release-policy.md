@@ -176,3 +176,14 @@ They are generated from the immutable `master` release commit by the protected P
 10F workflow, never from a mutable local worktree. The GitHub Release and future APT
 repository must publish the same byte-identical `.deb` covered by the manifest, SBOM,
 signature, and attestation.
+
+## Automation trust boundaries
+
+The concrete workflow permissions, protected environments, secret and variable
+inventory, publisher requirements, and first-release procedure are defined in
+[`release-automation.md`](release-automation.md). Pull-request and package jobs
+have read-only repository access and no release secrets. The tag build cannot sign
+or publish. Signing is isolated behind `release-signing`, and the workflow creates
+only a draft GitHub Release. APT `testing` and `stable` are separate protected
+environments; stable promotion reuses the testing snapshot and never invokes a
+build tool.
