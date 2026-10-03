@@ -2,10 +2,11 @@
 set -euo pipefail
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-version=0.1.0-1
-first_dir=reproducible/build-a
-second_dir=reproducible/build-b
-artifact_root=$project_root/artifacts/reproducible
+version=${CTF_HUNTER_DEBIAN_VERSION_OVERRIDE:-0.1.0-1}
+: "${REPRODUCIBLE_SUBDIRECTORY:=reproducible}"
+first_dir=$REPRODUCIBLE_SUBDIRECTORY/build-a
+second_dir=$REPRODUCIBLE_SUBDIRECTORY/build-b
+artifact_root=$project_root/artifacts/$REPRODUCIBLE_SUBDIRECTORY
 first_root=$project_root/artifacts/$first_dir
 second_root=$project_root/artifacts/$second_dir
 

@@ -31,6 +31,18 @@ checks BTF failure behavior, generates unsigned internal checksum/SBOM evidence,
 and uploads a short-lived internal artifact. The extended `reprotest` matrix is
 available through the manual `run_reprotest` input.
 
+`release-candidate.yml` runs only when `release/0.1.0` is pushed. A push trigger
+is required because GitHub accepts `workflow_dispatch` only after the workflow
+exists on the default branch. The workflow repeats the complete source gates,
+builds `0.1.0~rc1-1` twice, validates the Debian/Kali lifecycle and BTF
+diagnostics, and uploads the exact unsigned RC evidence. Public repositories
+also receive GitHub provenance and SBOM attestations. A separate job behind the
+`release-candidate` environment may stage those already-validated bytes as the
+immutable draft prerelease
+`v0.1.0-rc1`; it never publishes the draft or replaces a different existing
+asset. The RC tag is also required to resolve directly to the commit that
+produced the validated bytes.
+
 `release.yml` runs only when a version tag is pushed. It rejects a lightweight
 tag, a tag that does not match the frozen version, a non-merge release commit,
 or a commit not contained in `master`. The unprivileged build job rebuilds twice,
@@ -82,6 +94,15 @@ checksums, not the owner's general-purpose primary key. Rotate by adding the new
 public key to the documented trust path before using it, never by replacing an
 existing tag or release asset.
 
+Create a separate environment named `release-candidate`. Restrict it to the
+`release/0.1.0` branch and disable administrator bypass where the repository plan
+supports that control. Add a required reviewer when another trusted maintainer is
+available; a sole-maintainer repository must not enable a self-review policy that
+makes the environment impossible to approve. This environment needs no secrets.
+Set the environment variable `CTF_HUNTER_RC_STAGING=enabled`; its absence makes
+draft staging fail closed. The job's only write authority is the
+repository-scoped token used to stage a draft prerelease.
+
 GitHub artifact attestations require the repository to be public, or a GitHub
 plan that supports attestations for private repositories. The production tag
 must not be pushed until that prerequisite is satisfied.
@@ -120,15 +141,17 @@ the full package SHA-256.
 
 ## First-release operation
 
-1. Require successful `CI` and `Package validation` checks on the release merge.
+1. Require successful `CI` and `Package validation` checks on the release branch.
 2. Run the package workflow manually once with `run_reprotest` enabled.
-3. Complete the host-authorized systemd and live-capture tests from the release
+3. Configure the `release-candidate` environment, push `release/0.1.0`, approve
+   the protected staging job, and inspect the resulting RC1 draft.
+4. Complete the host-authorized systemd and live-capture tests from the release
    policy.
-4. Merge the release branch into `master` with an explicit merge commit.
-5. Create the signed annotated tag only on that commit and push it once.
-6. Review and approve `release-signing`; inspect the resulting draft and its
+5. Merge the release branch into `master` with an explicit merge commit.
+6. Create the signed annotated tag only on that commit and push it once.
+7. Review and approve `release-signing`; inspect the resulting draft and its
    checksum signature, SBOM, and provenance.
-7. Publish the GitHub draft only after the Phase 10G/10H acceptance gates.
-8. Leave APT disabled until Phase 10I provisions the external publisher. Then
+8. Publish the GitHub draft only after the Phase 10G/10H acceptance gates.
+9. Leave APT disabled until Phase 10I provisions the external publisher. Then
    dispatch `Publish APT snapshot` with the immutable tag and package SHA-256,
    validate `testing`, and approve `stable` without rebuilding.

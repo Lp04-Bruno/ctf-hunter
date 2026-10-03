@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -52,6 +53,16 @@ def main() -> int:
     metadata = load_toml(METADATA_PATH)
     version = metadata["application_version"]
     debian_version = metadata["debian_version"]
+    requested_debian_version = os.environ.get("CTF_HUNTER_DEBIAN_VERSION_OVERRIDE", "")
+    effective_debian_version = debian_version
+    if requested_debian_version:
+        expect(
+            errors,
+            "Debian version override",
+            requested_debian_version,
+            metadata["debian_prerelease_example"],
+        )
+        effective_debian_version = requested_debian_version
     maintainer = f'{metadata["maintainer_name"]} <{metadata["maintainer_email"]}>'
 
     expect(
@@ -104,7 +115,12 @@ def main() -> int:
     if match is None:
         errors.append(f"Debian changelog header is invalid: {first_line!r}")
     else:
-        expect(errors, "Debian changelog version", match.group(1), debian_version)
+        expect(
+            errors,
+            "Debian changelog version",
+            match.group(1),
+            effective_debian_version,
+        )
 
     migration_files = sorted((ROOT / "crates" / "hunter-database" / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql"))
     migration_versions = [int(path.name[:4]) for path in migration_files]
@@ -143,7 +159,7 @@ def main() -> int:
         return 1
 
     print(
-        f"Release metadata valid: CTF Hunter {version}, Debian {debian_version}, "
+        f"Release metadata valid: CTF Hunter {version}, Debian {effective_debian_version}, "
         f"schema {metadata['database']['schema_generation']}, {metadata['architecture']}"
     )
     return 0

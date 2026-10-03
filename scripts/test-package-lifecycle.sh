@@ -20,6 +20,7 @@ run_suite() {
         --security-opt label=disable \
         --volume "$package:/packages/ctf-hunter.deb:ro" \
         --volume "$project_root/scripts/package-lifecycle-test.sh:/test/package-lifecycle-test.sh:ro" \
+        --volume "$project_root/scripts/mock-notification-service.py:/test/mock-notification-service.py:ro" \
         "$image" \
         /bin/bash /test/package-lifecycle-test.sh /packages/ctf-hunter.deb "$label"
 }

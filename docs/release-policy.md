@@ -127,6 +127,15 @@ scripts/test-package-lifecycle.sh artifacts/reproducible/build-a/ctf-hunter_0.1.
 scripts/test-btf-failures.sh artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
 ```
 
+The release-candidate variant derives the exact prerelease version from
+`release/metadata.toml`, keeps its artifacts separate from final-release output,
+and applies the same reproducibility and package gates:
+
+```bash
+scripts/build-release-candidate.sh
+scripts/test-release-candidate.sh
+```
+
 The reproducibility gate compares both the main and detached-debug Debian packages
 byte for byte. On a mismatch it retains a `diffoscope` HTML report below the ignored
 `artifacts/reproducible/` directory. The additional `reprotest` wrapper perturbs the
@@ -140,9 +149,10 @@ scripts/reprotest-release.sh
 
 The disposable lifecycle matrix installs the package with APT on Debian 12 and Kali
 Rolling. It covers repeated installation, explicit and idempotent capture-group
-enrollment, daemon restart and database recovery without optional desktop services,
-same-schema downgrade and upgrade, remove, purge, reinstallation, retained user data,
-and a native GUI smoke test. Separate tests exercise missing and malformed kernel BTF.
+enrollment, watched-file analysis, freedesktop notification delivery, daemon restart,
+database and watch recovery, same-schema downgrade and upgrade, remove, purge,
+reinstallation, retained user data, and a native GUI smoke test. Separate tests
+exercise missing and malformed kernel BTF.
 
 Two host-authorized checks intentionally remain outside rootless containers because
 they require a real systemd instance or the host kernel's eBPF verifier:
@@ -150,6 +160,15 @@ they require a real systemd instance or the host kernel's eBPF verifier:
 ```bash
 sudo scripts/test-package-systemd.sh artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
 sudo scripts/test-packaged-capture.exp artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+```
+
+For RC1 the single wrapper below runs both checks plus the full packaged
+helper-to-daemon terminal integration and backpressure test against the exact
+candidate package:
+
+```bash
+sudo scripts/test-release-candidate-host.sh \
+  artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc1-1_amd64.deb
 ```
 
 ## Artifact verification and signing

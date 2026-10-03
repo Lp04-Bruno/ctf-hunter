@@ -10,7 +10,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
-EXPECTED = {"ci.yml", "package.yml", "release.yml", "publish-apt.yml"}
+EXPECTED = {
+    "ci.yml",
+    "package.yml",
+    "release-candidate.yml",
+    "release.yml",
+    "publish-apt.yml",
+}
 ALLOWED_ACTIONS = {
     "actions/checkout": "9f698171ed81b15d1823a05fc7211befd50c8ae0",
     "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
@@ -65,6 +71,40 @@ def main() -> int:
     require("scripts/run-ci-gates.sh" in release, "release does not repeat complete quality gates", errors)
     require("--draft" in release, "release workflow must create only a draft", errors)
     require("--clobber" not in release, "release assets must never be overwritten", errors)
+
+    candidate = contents.get("release-candidate.yml", "")
+    require(
+        "push:" in candidate
+        and "- release/0.1.0" in candidate
+        and "pull_request:" not in candidate
+        and "workflow_dispatch:" not in candidate,
+        "release candidate must run only for release-branch pushes",
+        errors,
+    )
+    require(
+        "github.ref == 'refs/heads/release/0.1.0'" in candidate,
+        "release candidate is not restricted to the release branch",
+        errors,
+    )
+    require(
+        "environment: release-candidate" in candidate,
+        "release-candidate publication is not environment-gated",
+        errors,
+    )
+    require(
+        'test "$CTF_HUNTER_RC_STAGING" = enabled' in candidate,
+        "release-candidate staging does not require the protected environment marker",
+        errors,
+    )
+    require("permissions: {}" in candidate, "release candidate must deny permissions by default", errors)
+    require("scripts/build-release-candidate.sh" in candidate, "release candidate uses no isolated RC build", errors)
+    require("--draft --prerelease" in candidate, "release candidate is not staged as a draft prerelease", errors)
+    require(
+        'test "$tag_target" = "commit $GITHUB_SHA"' in candidate,
+        "release candidate does not bind its RC tag to the validated commit",
+        errors,
+    )
+    require("--clobber" not in candidate, "release-candidate assets must never be overwritten", errors)
 
     apt = contents.get("publish-apt.yml", "")
     require("pull_request:" not in apt and "push:" not in apt, "APT publication must be manual-only", errors)

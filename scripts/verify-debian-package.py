@@ -17,7 +17,6 @@ with (PROJECT_ROOT / "release" / "metadata.toml").open("rb") as metadata_file:
 
 EXPECTED_FIELDS = {
     "Package": RELEASE_METADATA["package_name"],
-    "Version": RELEASE_METADATA["debian_version"],
     "Architecture": RELEASE_METADATA["architecture"],
 }
 
@@ -58,11 +57,16 @@ def field(package: Path, name: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("package", type=Path)
+    parser.add_argument(
+        "--expected-version", default=RELEASE_METADATA["debian_version"]
+    )
     args = parser.parse_args()
     package = args.package.resolve()
     errors: list[str] = []
 
-    for name, expected in EXPECTED_FIELDS.items():
+    expected_fields = {**EXPECTED_FIELDS, "Version": args.expected_version}
+
+    for name, expected in expected_fields.items():
         actual = field(package, name)
         if actual != expected:
             errors.append(f"{name}: expected {expected!r}, found {actual!r}")

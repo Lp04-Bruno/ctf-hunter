@@ -11,10 +11,6 @@ import subprocess
 from pathlib import Path
 
 
-PACKAGE_NAME = "ctf-hunter_0.1.0-1_amd64.deb"
-SBOM_NAME = "ctf-hunter_0.1.0-1_amd64.spdx.json"
-
-
 def digest(path: Path) -> str:
     hasher = hashlib.sha256()
     with path.open("rb") as source:
@@ -31,8 +27,20 @@ def main() -> int:
     artifact_dir = args.artifact_dir.resolve()
     errors: list[str] = []
     manifest = artifact_dir / "SHA256SUMS"
-    package = artifact_dir / PACKAGE_NAME
-    sbom_path = artifact_dir / SBOM_NAME
+    package_names = sorted(
+        path.name
+        for path in artifact_dir.glob("ctf-hunter_*_amd64.deb")
+        if not path.name.startswith("ctf-hunter-dbgsym_")
+    )
+    if len(package_names) == 1:
+        package_name = package_names[0]
+        sbom_name = f"{package_name.removesuffix('.deb')}.spdx.json"
+    else:
+        package_name = ""
+        sbom_name = ""
+        errors.append("expected exactly one primary Debian package")
+    package = artifact_dir / package_name
+    sbom_path = artifact_dir / sbom_name
 
     if not manifest.is_file():
         errors.append("SHA256SUMS is missing")
@@ -58,7 +66,9 @@ def main() -> int:
             elif digest(path) != expected:
                 errors.append(f"checksum mismatch: {name}")
 
-    for required in (PACKAGE_NAME, SBOM_NAME):
+    for required in (package_name, sbom_name):
+        if not required:
+            continue
         if required not in entries:
             errors.append(f"SHA256SUMS does not cover {required}")
 

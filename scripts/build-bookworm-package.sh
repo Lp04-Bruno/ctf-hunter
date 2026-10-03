@@ -5,6 +5,8 @@ project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$project_root/release/build-environment.env"
 : "${CTF_HUNTER_BUILD_IMAGE:=localhost/ctf-hunter-build:0.1.0-bookworm}"
 : "${ARTIFACT_SUBDIRECTORY:=bookworm}"
+release_debian_version=$(dpkg-parsechangelog -l"$project_root/debian/changelog" -S Version)
+debian_version=${CTF_HUNTER_DEBIAN_VERSION_OVERRIDE:-$release_debian_version}
 
 if ! "$project_root/scripts/podman-release.sh" image exists "$CTF_HUNTER_BUILD_IMAGE"; then
     "$project_root/scripts/build-release-container.sh"
@@ -30,6 +32,8 @@ log_file="$artifact_dir/build.log"
     --env "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" \
     --env "CTF_HUNTER_EBPF_TOOLCHAIN=$RUST_NIGHTLY" \
     --env "ARTIFACT_SUBDIRECTORY=$ARTIFACT_SUBDIRECTORY" \
+    --env "CTF_HUNTER_DEBIAN_VERSION_OVERRIDE=${CTF_HUNTER_DEBIAN_VERSION_OVERRIDE:-}" \
+    --env "CTF_HUNTER_PACKAGE_VERSION=$debian_version" \
     "$CTF_HUNTER_BUILD_IMAGE" \
     bash -o errexit -o nounset -o pipefail -c '
         rm -rf /build/source
@@ -58,5 +62,5 @@ log_file="$artifact_dir/build.log"
             CTF_HUNTER_BUILD_ROOT=/build/ctf-hunter-package \
             scripts/build-debian-package.sh
         lintian --profile debian --pedantic \
-            "/workspace/artifacts/$ARTIFACT_SUBDIRECTORY/ctf-hunter_0.1.0-1_amd64.changes"
+            "/workspace/artifacts/$ARTIFACT_SUBDIRECTORY/ctf-hunter_${CTF_HUNTER_PACKAGE_VERSION}_amd64.changes"
     ' 2>&1 | tee "$log_file"

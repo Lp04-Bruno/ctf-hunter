@@ -8,18 +8,21 @@ signing_key=${CTF_HUNTER_SIGNING_KEY:-}
 signing_passphrase_file=${CTF_HUNTER_SIGNING_PASSPHRASE_FILE:-}
 
 artifact_dir=$(realpath "$artifact_dir")
-package=$artifact_dir/ctf-hunter_0.1.0-1_amd64.deb
-test -f "$package" || {
-    echo "release package not found: $package" >&2
+mapfile -t packages < <(find "$artifact_dir" -maxdepth 1 -type f \
+    -name 'ctf-hunter_*_amd64.deb' ! -name 'ctf-hunter-dbgsym_*' \
+    -print | LC_ALL=C sort)
+if test "${#packages[@]}" -ne 1; then
+    echo "expected exactly one release package in $artifact_dir" >&2
     exit 1
-}
+fi
+package=${packages[0]}
 
 if test -z "${SOURCE_DATE_EPOCH:-}"; then
     SOURCE_DATE_EPOCH=$(git -C "$project_root" log -1 --format=%ct)
 fi
 export SOURCE_DATE_EPOCH
 
-sbom=$artifact_dir/ctf-hunter_0.1.0-1_amd64.spdx.json
+sbom=${package%.deb}.spdx.json
 python3 "$project_root/scripts/generate-spdx-sbom.py" "$package" "$sbom"
 
 (
