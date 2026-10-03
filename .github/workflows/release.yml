@@ -70,6 +70,9 @@ jobs:
             "localhost/ctf-hunter-build:0.1.0-bookworm" \
             scripts/run-ci-gates.sh
 
+      - name: Reclaim source-gate build space
+        run: scripts/reclaim-release-space.sh
+
       - name: Build twice and compare packages
         run: scripts/verify-reproducible-build.sh
 

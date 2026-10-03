@@ -134,6 +134,15 @@ def main() -> int:
     require("permissions: {}" in release, "release must deny permissions by default", errors)
     require("actions/attest@" in release, "release lacks GitHub attestation", errors)
     require("scripts/run-ci-gates.sh" in release, "release does not repeat complete quality gates", errors)
+    release_quality = release.find("scripts/run-ci-gates.sh")
+    release_cleanup = release.find("scripts/reclaim-release-space.sh")
+    release_package = release.find("scripts/verify-reproducible-build.sh")
+    require(
+        -1 not in (release_quality, release_cleanup, release_package)
+        and release_quality < release_cleanup < release_package,
+        "release must reclaim source-gate artifacts before package builds",
+        errors,
+    )
     require("--draft" in release, "release workflow must create only a draft", errors)
     require("--clobber" not in release, "release assets must never be overwritten", errors)
 
@@ -163,6 +172,15 @@ def main() -> int:
     )
     require("permissions: {}" in candidate, "release candidate must deny permissions by default", errors)
     require("scripts/build-release-candidate.sh" in candidate, "release candidate uses no isolated RC build", errors)
+    candidate_quality = candidate.find("scripts/run-ci-gates.sh")
+    candidate_cleanup = candidate.find("scripts/reclaim-release-space.sh")
+    candidate_package = candidate.find("scripts/build-release-candidate.sh")
+    require(
+        -1 not in (candidate_quality, candidate_cleanup, candidate_package)
+        and candidate_quality < candidate_cleanup < candidate_package,
+        "release candidate must reclaim source-gate artifacts before package builds",
+        errors,
+    )
     require("--draft --prerelease" in candidate, "release candidate is not staged as a draft prerelease", errors)
     require(
         'test "$tag_target" = "commit $GITHUB_SHA"' in candidate,

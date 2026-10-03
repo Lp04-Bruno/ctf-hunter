@@ -34,7 +34,8 @@ available through the manual `run_reprotest` input.
 `release-candidate.yml` runs only when `release/0.1.0` is pushed. A push trigger
 is required because GitHub accepts `workflow_dispatch` only after the workflow
 exists on the default branch. The workflow repeats the complete source gates,
-builds `0.1.0~rc1-1` twice, validates the Debian/Kali lifecycle and BTF
+reclaims only their generated Cargo and frontend workspace artifacts, builds
+`0.1.0~rc1-1` twice, validates the Debian/Kali lifecycle and BTF
 diagnostics, and uploads the exact unsigned RC evidence. Public repositories
 also receive GitHub provenance and SBOM attestations. A separate job behind the
 `release-candidate` environment may stage those already-validated bytes as the
@@ -46,7 +47,8 @@ produced the validated bytes.
 `release.yml` runs only when a version tag is pushed. It rejects a lightweight
 tag, a tag that does not match the frozen version, a non-merge release commit,
 or a commit not contained in `master`. The unprivileged build job rebuilds twice,
-repeats package gates, generates the SPDX SBOM and checksum manifest, and creates
+reclaims generated source-gate artifacts before the package builds, repeats
+package gates, generates the SPDX SBOM and checksum manifest, and creates
 GitHub provenance and SBOM attestations. It has no signing key and cannot create
 a Release.
 
