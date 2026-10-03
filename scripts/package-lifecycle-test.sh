@@ -268,7 +268,8 @@ dpkg-deb --raw-extract "$package" "$fixture_dir/root"
 package_version=$(dpkg-deb --field "$package" Version)
 case "$package_version" in
     0.1.0~rc1-1) previous_version=0.1.0~rc0-1 ;;
-    0.1.0-1) previous_version=0.1.0~rc1-1 ;;
+    0.1.0~rc2-1) previous_version=0.1.0~rc1-1 ;;
+    0.1.0-1) previous_version=0.1.0~rc2-1 ;;
     *) fail "unsupported package version in lifecycle test: $package_version" ;;
 esac
 sed -i "s/^Version: .*/Version: $previous_version/" "$fixture_dir/root/DEBIAN/control"

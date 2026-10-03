@@ -9,7 +9,7 @@ contract require review on the active release branch and must pass
 - Product: CTF Hunter
 - Upstream version: `0.1.0`
 - Initial Debian version: `0.1.0-1`
-- Debian release-candidate form: `0.1.0~rc1-1`
+- Debian release-candidate form: `0.1.0~rc2-1`
 - Architecture: `amd64`
 - Desktop identifier: `dev.ctfhunter.desktop`
 - Debian package and installed application name: `ctf-hunter`
@@ -69,7 +69,7 @@ revisions appended after a hyphen. Debian prereleases use a tilde so that APT or
 them before the final release:
 
 ```text
-0.1.0~rc1-1 < 0.1.0-1 < 0.1.0-2 < 0.1.1-1
+0.1.0~rc1-1 < 0.1.0~rc2-1 < 0.1.0-1 < 0.1.0-2 < 0.1.1-1
 ```
 
 The workspace, Tauri configuration, npm package metadata, npm lockfile, release
@@ -145,6 +145,13 @@ outer environment, build path, timezone, locale, umask, and file ordering:
 scripts/reprotest-release.sh
 ```
 
+The wrapper operates on a filtered source tree that excludes repository metadata,
+local setup notes, package evidence, compiler output, and frontend dependencies.
+Its temporary build root is kept below `artifacts/` so large nested package builds
+do not depend on the host's potentially small `/tmp` filesystem. Both perturbed
+source copies use the same prebuilt, digest-pinned Podman image store outside
+their varied build paths; they cannot silently rebuild against another base.
+
 ## Package lifecycle verification
 
 The disposable lifecycle matrix installs the package with APT on Debian 12 and Kali
@@ -162,13 +169,13 @@ sudo scripts/test-package-systemd.sh artifacts/reproducible/build-a/ctf-hunter_0
 sudo scripts/test-packaged-capture.exp artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
 ```
 
-For RC1 the single wrapper below runs both checks plus the full packaged
+For RC2 the single wrapper below runs both checks plus the full packaged
 helper-to-daemon terminal integration and backpressure test against the exact
 candidate package:
 
 ```bash
 sudo scripts/test-release-candidate-host.sh \
-  artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc1-1_amd64.deb
+  artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.deb
 ```
 
 ## Artifact verification and signing

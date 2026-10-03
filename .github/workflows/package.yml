@@ -34,7 +34,8 @@ jobs:
       - name: Install package-test prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends diffoscope podman reprotest
+          sudo apt-get install -y --no-install-recommends \
+            diffoscope disorderfs podman reprotest rsync
 
       - name: Prepare pinned release images
         run: |

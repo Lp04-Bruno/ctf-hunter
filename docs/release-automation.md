@@ -29,18 +29,21 @@ read access and no secrets. It produces two clean Debian 12 builds, compares the
 main and debug packages byte for byte, runs Debian and Kali lifecycle tests,
 checks BTF failure behavior, generates unsigned internal checksum/SBOM evidence,
 and uploads a short-lived internal artifact. The extended `reprotest` matrix is
-available through the manual `run_reprotest` input.
+available through the manual `run_reprotest` input. It stages a filtered source
+tree outside the checkout, excludes all generated build state, uses a disk-backed
+temporary root, pins both perturbed builds to the already-prepared release-builder
+store, and installs `disorderfs` for the file-ordering perturbation.
 
 `release-candidate.yml` runs only when `release/0.1.0` is pushed. A push trigger
 is required because GitHub accepts `workflow_dispatch` only after the workflow
 exists on the default branch. The workflow repeats the complete source gates,
 reclaims only their generated Cargo and frontend workspace artifacts, builds
-`0.1.0~rc1-1` twice, validates the Debian/Kali lifecycle and BTF
+`0.1.0~rc2-1` twice, validates the Debian/Kali lifecycle and BTF
 diagnostics, and uploads the exact unsigned RC evidence. Public repositories
 also receive GitHub provenance and SBOM attestations. A separate job behind the
 `release-candidate` environment may stage those already-validated bytes as the
 immutable draft prerelease
-`v0.1.0-rc1`; it never publishes the draft or replaces a different existing
+`v0.1.0-rc2`; it never publishes the draft or replaces a different existing
 asset. The RC tag is also required to resolve directly to the commit that
 produced the validated bytes. The staging job creates or verifies that lightweight
 RC reference before creating the draft with `--verify-tag`; it does not depend
@@ -160,7 +163,8 @@ the full package SHA-256.
 1. Require successful `CI` and `Package validation` checks on the release branch.
 2. Run the package workflow manually once with `run_reprotest` enabled.
 3. Configure the `release-candidate` environment, push `release/0.1.0`, approve
-   the protected staging job, and inspect the resulting RC1 draft.
+   the protected staging job, and inspect the resulting RC2 draft. The immutable
+   RC1 remains available as evidence for the earlier candidate commit.
 4. Complete the host-authorized systemd and live-capture tests from the release
    policy.
 5. Merge the release branch into `master` with an explicit merge commit.

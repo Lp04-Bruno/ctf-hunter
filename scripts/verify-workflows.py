@@ -128,6 +128,18 @@ def main() -> int:
         require("id-token: write" not in text, f"{name} must not mint OIDC tokens", errors)
         require("attestations: write" not in text, f"{name} must not publish attestations", errors)
 
+    package = contents.get("package.yml", "")
+    require(
+        "diffoscope disorderfs podman reprotest rsync" in package,
+        "package validation lacks complete reprotest prerequisites",
+        errors,
+    )
+    require(
+        "scripts/reprotest-release.sh" in package,
+        "package validation lacks the extended reprotest gate",
+        errors,
+    )
+
     release = contents.get("release.yml", "")
     require("tags:" in release and "- v*.*.*" in release, "release must be tag-only", errors)
     require("environment: release-signing" in release, "release signing is not environment-gated", errors)
