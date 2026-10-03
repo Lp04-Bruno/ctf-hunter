@@ -142,21 +142,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=v0.1.0-rc1
+          tag_api="repos/$GITHUB_REPOSITORY/git/ref/tags/$tag"
+          if ! tag_target=$(gh api "$tag_api" \
+            --jq '.object.type + " " + .object.sha' 2>/dev/null); then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$tag" \
+              -f sha="$GITHUB_SHA" >/dev/null
+            tag_target=$(gh api "$tag_api" \
+              --jq '.object.type + " " + .object.sha')
+          fi
+          test "$tag_target" = "commit $GITHUB_SHA"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
             test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = true
+            release_target=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json targetCommitish --jq .targetCommitish)
+            if test "$release_target" != "$GITHUB_SHA"; then
+              test -z "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+                --json assets --jq '.assets[].name')"
+              gh release edit "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --target "$GITHUB_SHA" \
+                --verify-tag
+            fi
           else
             gh release create "$tag" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
+              --verify-tag \
               --draft --prerelease \
               --title "CTF Hunter 0.1.0 RC1" \
               --notes-file docs/releases/0.1.0-rc1.md
           fi
-          tag_target=$(gh api \
-            "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" \
-            --jq '.object.type + " " + .object.sha')
-          test "$tag_target" = "commit $GITHUB_SHA"
+          test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"
           existing=$(gh release view "$tag" \
             --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           for artifact in release-artifacts/*; do

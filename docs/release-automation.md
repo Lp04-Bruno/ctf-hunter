@@ -42,7 +42,12 @@ also receive GitHub provenance and SBOM attestations. A separate job behind the
 immutable draft prerelease
 `v0.1.0-rc1`; it never publishes the draft or replaces a different existing
 asset. The RC tag is also required to resolve directly to the commit that
-produced the validated bytes.
+produced the validated bytes. The staging job creates or verifies that lightweight
+RC reference before creating the draft with `--verify-tag`; it does not depend
+on deferred automatic tag creation by a draft release. An empty orphaned draft
+from an interrupted staging attempt may be adopted only after its tag and target
+are rebound to the current validated commit; a draft carrying assets is never
+silently retargeted.
 
 `release.yml` runs only when a version tag is pushed. It rejects a lightweight
 tag, a tag that does not match the frozen version, a non-merge release commit,

@@ -183,6 +183,23 @@ def main() -> int:
     )
     require("--draft --prerelease" in candidate, "release candidate is not staged as a draft prerelease", errors)
     require(
+        'gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs"' in candidate
+        and '-f ref="refs/tags/$tag"' in candidate
+        and '-f sha="$GITHUB_SHA"' in candidate,
+        "release candidate does not explicitly bind its RC tag to the workflow commit",
+        errors,
+    )
+    require(
+        "--verify-tag" in candidate,
+        "release candidate draft does not require the preverified RC tag",
+        errors,
+    )
+    require(
+        '--json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"' in candidate,
+        "release candidate does not verify the draft target commit",
+        errors,
+    )
+    require(
         'test "$tag_target" = "commit $GITHUB_SHA"' in candidate,
         "release candidate does not bind its RC tag to the validated commit",
         errors,
