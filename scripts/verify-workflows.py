@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -10,6 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
+DEPENDABOT_PATH = ROOT / ".github" / "dependabot.yml"
+RENOVATE_PATH = ROOT / "renovate.json"
 EXPECTED = {
     "ci.yml",
     "package.yml",
@@ -33,7 +36,69 @@ def require(condition: bool, message: str, errors: list[str]) -> None:
 def main() -> int:
     errors: list[str] = []
     paths = {path.name: path for path in WORKFLOW_DIR.glob("*.yml")}
-    require(set(paths) == EXPECTED, f"workflow set must be exactly {sorted(EXPECTED)}", errors)
+    require(
+        set(paths) == EXPECTED,
+        f"workflow set must be exactly {sorted(EXPECTED)}",
+        errors,
+    )
+
+    require(
+        not DEPENDABOT_PATH.exists(),
+        "Dependabot configuration must remain removed",
+        errors,
+    )
+    try:
+        renovate = json.loads(RENOVATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        errors.append(f"Renovate configuration is invalid: {error}")
+        renovate = {}
+    require(
+        renovate.get("baseBranchPatterns") == ["develop"],
+        "Renovate must target only develop",
+        errors,
+    )
+    require(
+        renovate.get("enabledManagers") == ["github-actions"],
+        "Renovate must remain limited to GitHub Actions",
+        errors,
+    )
+    renovate_extends = renovate.get("extends", [])
+    require(
+        "config:recommended" in renovate_extends
+        and "schedule:monthly" in renovate_extends,
+        "Renovate must use recommended monthly updates",
+        errors,
+    )
+    require(
+        renovate.get("prConcurrentLimit") == 5,
+        "Renovate PR limit must remain five",
+        errors,
+    )
+    require(
+        renovate.get("minimumReleaseAge") == "7 days",
+        "Renovate release age must remain seven days",
+        errors,
+    )
+    require(
+        renovate.get("internalChecksFilter") == "strict",
+        "Renovate release-age checks must be strict",
+        errors,
+    )
+    require(
+        renovate.get("automerge") is False,
+        "Renovate must never automerge",
+        errors,
+    )
+    require(
+        renovate.get("semanticCommits") == "disabled",
+        "Renovate must use plain commit titles",
+        errors,
+    )
+    require(
+        renovate.get("commitMessageAction") == "Update",
+        "Renovate commit titles must start in English",
+        errors,
+    )
 
     contents: dict[str, str] = {}
     action_pattern = re.compile(r"^\s*-?\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)

@@ -71,11 +71,20 @@ and the publisher have been provisioned.
 
 ## Required GitHub configuration
 
-Protect `.github/workflows/`, `release/`, Debian packaging, and publication
-scripts through the checked-in `CODEOWNERS` rules and branch protection on
-`master` and `develop`. Dependabot checks the pinned GitHub Actions monthly on
-`develop`; a proposed SHA change must also update and pass the reviewed allowlist
-in `scripts/verify-workflows.py`.
+Protect `.github/workflows/`, `renovate.json`, `release/`, Debian packaging, and
+publication scripts through the checked-in `CODEOWNERS` rules and branch
+protection on `master` and `develop`. Renovate checks the pinned GitHub Actions
+monthly and opens pull requests only against `develop`; a proposed SHA change
+must also update and pass the reviewed allowlist in
+`scripts/verify-workflows.py`. Renovate never automerges these changes.
+
+The repository configuration is intentionally limited to the `github-actions`
+manager, retains full commit-SHA pins and their version comments, waits seven
+days after a release, and limits concurrent dependency pull requests to five.
+Install the Renovate GitHub App only after this configuration reaches the
+default branch and the release branch has also been merged back into `develop`.
+Because the configuration already exists on `master`, Renovate can use it
+directly instead of proposing a separate onboarding configuration.
 
 Create a protected environment named `release-signing` with required reviewers,
 self-review disabled, tag deployment restricted to `v*.*.*`, and administrator
