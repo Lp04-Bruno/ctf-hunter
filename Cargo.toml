@@ -1,0 +1,81 @@
+[workspace]
+members = [
+    "capture/ctf-hunter-capture",
+    "capture/ctf-hunter-common",
+    "capture/ctf-hunter-ebpf",
+    "crates/hunter-core",
+    "crates/hunter-collectors",
+    "crates/hunter-capture-protocol",
+    "crates/hunter-capture-client",
+    "crates/hunter-decoder",
+    "crates/hunter-database",
+    "crates/hunter-flags",
+    "crates/hunter-ipc",
+    "crates/hunter-parser",
+    "crates/hunter-scoring",
+    "crates/hunter-types",
+    "crates/ctf-hunter-setup",
+    "daemon/ctf-hunterd",
+    "ui/src-tauri",
+]
+resolver = "3"
+default-members = [
+    "capture/ctf-hunter-capture",
+    "capture/ctf-hunter-common",
+    "crates/hunter-core",
+    "crates/hunter-collectors",
+    "crates/hunter-decoder",
+    "crates/hunter-database",
+    "crates/hunter-flags",
+    "crates/hunter-ipc",
+    "crates/hunter-parser",
+    "crates/hunter-scoring",
+    "crates/hunter-types",
+    "crates/ctf-hunter-setup",
+    "daemon/ctf-hunterd",
+    "ui/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+authors = ["Lp04-Bruno <88251364+lp04-Bruno@users.noreply.github.com>"]
+description = "Linux-first passive CTF flag discovery for terminals and files"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Lp04-Bruno/ctf-hunter"
+readme = "README.md"
+
+[workspace.dependencies]
+anyhow = "1.0"
+aya = { version = "0.14", default-features = false }
+aya-build = { version = "0.2", default-features = false }
+aya-ebpf = { version = "0.2.1", default-features = false }
+base64 = "0.22"
+blake3 = "1.8"
+bzip2 = "0.6"
+data-encoding = "2.9"
+flate2 = "1.1"
+inotify = { version = "0.11.5", default-features = false }
+nix = { version = "0.31", features = ["fs", "socket", "user"] }
+notify-rust = { version = "=4.18.1", default-features = false, features = ["d"] }
+regex = "1.12"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+signal-hook = "0.4"
+tempfile = "3.27"
+thiserror = "2.0"
+time = { version = "0.3", features = ["formatting", "parsing"] }
+uuid = { version = "1.18", features = ["serde", "v4"] }
+
+[profile.release.package.ctf-hunter-ebpf]
+debug = 2
+codegen-units = 1
+strip = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

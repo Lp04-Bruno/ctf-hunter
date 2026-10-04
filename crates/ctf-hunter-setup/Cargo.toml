@@ -1,0 +1,21 @@
+[package]
+name = "ctf-hunter-setup"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+publish = false
+
+[[bin]]
+name = "ctf-hunter-enable-capture"
+path = "src/main.rs"
+
+[dependencies]
+nix.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+[Unit]
+Description=CTF Hunter per-user analysis daemon
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ctf-hunterd --database %h/.local/share/ctf-hunter/hunter.db --socket %t/ctf-hunter/daemon.sock --capture-socket /run/ctf-hunter/capture.sock
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+
+NoNewPrivileges=yes
+LockPersonality=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/ctf-hunter %t/ctf-hunter
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target

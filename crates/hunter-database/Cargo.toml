@@ -1,0 +1,25 @@
+[package]
+name = "hunter-database"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+hunter-core = { path = "../hunter-core" }
+hunter-types = { path = "../hunter-types" }
+rusqlite.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hunter-flags = { path = "../hunter-flags" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

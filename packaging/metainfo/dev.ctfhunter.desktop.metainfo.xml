@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.ctfhunter.desktop</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>CTF Hunter</name>
+  <summary>Find and decode CTF flags from local sources</summary>
+  <description>
+    <p>
+      CTF Hunter monitors explicitly selected terminals and directories, finds
+      flag candidates, applies bounded recursive decoding, and preserves the
+      provenance of every result.
+    </p>
+    <p>
+      Analysis and storage run as the desktop user. A separate capability-bound
+      helper provides optional foreground terminal capture without wrapping the
+      monitored program.
+    </p>
+  </description>
+  <developer id="com.github.lp04bruno">
+    <name>Lp04-Bruno</name>
+  </developer>
+  <url type="homepage">https://github.com/Lp04-Bruno/ctf-hunter</url>
+  <url type="bugtracker">https://github.com/Lp04-Bruno/ctf-hunter/issues</url>
+  <launchable type="desktop-id">dev.ctfhunter.desktop</launchable>
+  <provides>
+    <binary>ctf-hunter</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-09-29"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

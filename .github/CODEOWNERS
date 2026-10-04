@@ -1,0 +1,6 @@
+# Release automation and trust-boundary changes require owner review.
+/.github/ @Lp04-Bruno
+/renovate.json @Lp04-Bruno
+/release/ @Lp04-Bruno
+/debian/ @Lp04-Bruno
+/scripts/ @Lp04-Bruno

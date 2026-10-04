@@ -1,0 +1,21 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "schedule:monthly"
+  ],
+  "baseBranchPatterns": [
+    "develop"
+  ],
+  "enabledManagers": [
+    "github-actions"
+  ],
+  "timezone": "Etc/UTC",
+  "prConcurrentLimit": 5,
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "automerge": false,
+  "semanticCommits": "disabled",
+  "commitMessageAction": "Update",
+  "commitMessageLowerCase": "never"
+}

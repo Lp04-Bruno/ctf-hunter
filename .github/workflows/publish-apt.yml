@@ -1,0 +1,199 @@
+name: Publish APT snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Immutable GitHub Release tag to promote
+        required: true
+        default: v0.1.0
+        type: string
+      package_sha256:
+        description: Expected SHA-256 of the main Debian package
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: apt-publication
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Check publication contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out production automation
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Require provisioned APT metadata
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA: ${{ inputs.package_sha256 }}
+        run: |
+          python3 scripts/check-apt-publication.py \
+            --tag "$RELEASE_TAG" \
+            --sha256 "$EXPECTED_SHA"
+
+  publish-testing:
+    name: Publish and validate testing
+    needs: preflight
+    runs-on: [self-hosted, linux, x64, ctf-hunter-apt]
+    timeout-minutes: 60
+    environment: apt-testing
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Check out production automation
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Download GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          install -d release-artifacts
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir release-artifacts \
+            --pattern 'ctf-hunter*' \
+            --pattern 'SHA256SUMS' \
+            --pattern 'SHA256SUMS.asc'
+
+      - name: Verify checksum signature and provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_GPG_PUBLIC_KEY: ${{ secrets.RELEASE_GPG_PUBLIC_KEY }}
+          RELEASE_GPG_FINGERPRINT: ${{ vars.RELEASE_GPG_FINGERPRINT }}
+          EXPECTED_SHA: ${{ inputs.package_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          test -n "$RELEASE_GPG_PUBLIC_KEY"
+          export GNUPGHOME="$RUNNER_TEMP/release-verify-gnupg"
+          install -d -m 0700 "$GNUPGHOME"
+          printf '%s' "$RELEASE_GPG_PUBLIC_KEY" >"$RUNNER_TEMP/release-key.asc"
+          gpg --batch --import "$RUNNER_TEMP/release-key.asc"
+          actual=$(gpg --batch --with-colons --import-options show-only --import \
+            "$RUNNER_TEMP/release-key.asc" | awk -F: '$1 == "fpr" {print $10; exit}')
+          test "$actual" = "${RELEASE_GPG_FINGERPRINT// /}"
+          gpg --batch --verify release-artifacts/SHA256SUMS.asc release-artifacts/SHA256SUMS
+          (cd release-artifacts && sha256sum --check SHA256SUMS)
+          package=release-artifacts/ctf-hunter_0.1.0-1_amd64.deb
+          test "$(sha256sum "$package" | cut -d' ' -f1)" = "$EXPECTED_SHA"
+          gh attestation verify "$package" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG"
+
+      - name: Publish immutable testing snapshot
+        env:
+          APTLY_CONFIG: ${{ vars.APTLY_CONFIG }}
+          APTLY_PUBLISH_TARGET: ${{ vars.APTLY_PUBLISH_TARGET }}
+          APTLY_GPG_KEY: ${{ vars.APTLY_GPG_KEY }}
+          APTLY_GPG_PASSPHRASE_FILE: ${{ vars.APTLY_GPG_PASSPHRASE_FILE }}
+          APTLY_ORIGIN: ${{ vars.APTLY_ORIGIN }}
+          APTLY_LABEL: ${{ vars.APTLY_LABEL }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA: ${{ inputs.package_sha256 }}
+        run: |
+          scripts/publish-apt-snapshot.sh testing \
+            release-artifacts/ctf-hunter_0.1.0-1_amd64.deb \
+            "$RELEASE_TAG" "$EXPECTED_SHA"
+
+      - name: Install through testing source
+        env:
+          APTLY_CONFIG: ${{ vars.APTLY_CONFIG }}
+          APTLY_GPG_KEY: ${{ vars.APTLY_GPG_KEY }}
+          APT_REPOSITORY_URL: ${{ vars.APT_REPOSITORY_URL }}
+          EXPECTED_SHA: ${{ inputs.package_sha256 }}
+        run: |
+          archive_key="$RUNNER_TEMP/ctf-hunter-archive-keyring.gpg"
+          gpg --batch --export "$APTLY_GPG_KEY" >"$archive_key"
+          test -s "$archive_key"
+          scripts/test-apt-repository.sh \
+            "$APT_REPOSITORY_URL" testing "$archive_key" \
+            0.1.0-1 "$EXPECTED_SHA"
+
+  publish-stable:
+    name: Approve and promote exact snapshot
+    needs: publish-testing
+    runs-on: [self-hosted, linux, x64, ctf-hunter-apt]
+    timeout-minutes: 60
+    environment: apt-stable
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Check out production automation
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          ref: master
+          persist-credentials: false
+
+      - name: Download and reverify release package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA: ${{ inputs.package_sha256 }}
+          RELEASE_GPG_PUBLIC_KEY: ${{ secrets.RELEASE_GPG_PUBLIC_KEY }}
+          RELEASE_GPG_FINGERPRINT: ${{ vars.RELEASE_GPG_FINGERPRINT }}
+        run: |
+          install -d release-artifacts
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir release-artifacts \
+            --pattern 'ctf-hunter*' \
+            --pattern 'SHA256SUMS' \
+            --pattern 'SHA256SUMS.asc'
+          test -n "$RELEASE_GPG_PUBLIC_KEY"
+          export GNUPGHOME="$RUNNER_TEMP/stable-verify-gnupg"
+          install -d -m 0700 "$GNUPGHOME"
+          printf '%s' "$RELEASE_GPG_PUBLIC_KEY" >"$RUNNER_TEMP/release-key.asc"
+          gpg --batch --import "$RUNNER_TEMP/release-key.asc"
+          actual=$(gpg --batch --with-colons --import-options show-only --import \
+            "$RUNNER_TEMP/release-key.asc" | awk -F: '$1 == "fpr" {print $10; exit}')
+          test "$actual" = "${RELEASE_GPG_FINGERPRINT// /}"
+          gpg --batch --verify release-artifacts/SHA256SUMS.asc release-artifacts/SHA256SUMS
+          (cd release-artifacts && sha256sum --check SHA256SUMS)
+          package=release-artifacts/ctf-hunter_0.1.0-1_amd64.deb
+          test "$(sha256sum "$package" | cut -d' ' -f1)" = "$EXPECTED_SHA"
+          gh attestation verify "$package" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG"
+
+      - name: Promote the same snapshot to stable
+        env:
+          APTLY_CONFIG: ${{ vars.APTLY_CONFIG }}
+          APTLY_PUBLISH_TARGET: ${{ vars.APTLY_PUBLISH_TARGET }}
+          APTLY_GPG_KEY: ${{ vars.APTLY_GPG_KEY }}
+          APTLY_GPG_PASSPHRASE_FILE: ${{ vars.APTLY_GPG_PASSPHRASE_FILE }}
+          APTLY_ORIGIN: ${{ vars.APTLY_ORIGIN }}
+          APTLY_LABEL: ${{ vars.APTLY_LABEL }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA: ${{ inputs.package_sha256 }}
+        run: |
+          scripts/publish-apt-snapshot.sh stable \
+            release-artifacts/ctf-hunter_0.1.0-1_amd64.deb \
+            "$RELEASE_TAG" "$EXPECTED_SHA"
+
+      - name: Install through stable source
+        env:
+          APTLY_CONFIG: ${{ vars.APTLY_CONFIG }}
+          APTLY_GPG_KEY: ${{ vars.APTLY_GPG_KEY }}
+          APT_REPOSITORY_URL: ${{ vars.APT_REPOSITORY_URL }}
+          EXPECTED_SHA: ${{ inputs.package_sha256 }}
+        run: |
+          archive_key="$RUNNER_TEMP/ctf-hunter-archive-keyring.gpg"
+          gpg --batch --export "$APTLY_GPG_KEY" >"$archive_key"
+          test -s "$archive_key"
+          scripts/test-apt-repository.sh \
+            "$APT_REPOSITORY_URL" stable "$archive_key" \
+            0.1.0-1 "$EXPECTED_SHA"

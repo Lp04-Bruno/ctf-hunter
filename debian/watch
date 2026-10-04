@@ -1,0 +1,4 @@
+version=4
+opts=filenamemangle=s/.+\/v?(\d\S+)\.tar\.gz/ctf-hunter-$1\.tar\.gz/ \
+ https://github.com/Lp04-Bruno/ctf-hunter/tags \
+ .*/archive/refs/tags/v?(\d\S+)\.tar\.gz

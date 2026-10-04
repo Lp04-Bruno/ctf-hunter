@@ -1,0 +1,54 @@
+.TH CTF-HUNTERCTL 1 "September 2026" "CTF Hunter 0.1.0" "User Commands"
+.SH NAME
+ctf-hunterctl \- inspect and control a local CTF Hunter daemon
+.SH SYNOPSIS
+.B ctf-hunterctl --socket
+.I PATH COMMAND
+.RI [ ARGUMENT ...]
+.SH DESCRIPTION
+.B ctf-hunterctl
+sends one typed request to a running per-user daemon and prints its JSON
+response. The socket option must be the first argument.
+.SH COMMANDS
+.TP
+.B status
+Show daemon, collector, queue, notification, and capture health.
+.TP
+.B sessions
+List sessions.
+.TP
+.BI create " NAME [PATTERN ...]"
+Create a session.
+.TP
+.BI update " ID NAME [PATTERN ...]"
+Update an inactive or paused session.
+.TP
+.BI start|pause|resume|stop " ID"
+Change a session's lifecycle state.
+.TP
+.BI add-watch|remove-watch " ID DIRECTORY"
+Add or remove a watched directory.
+.TP
+.BI watches " ID"
+List watched directories.
+.TP
+.BI add-terminal|remove-terminal " ID TTY"
+Add or remove a terminal source.
+.TP
+.BI terminals " ID"
+List terminal sources.
+.TP
+.BI submit|preview " ID TEXT"
+Persistently submit or non-persistently preview text analysis.
+.TP
+.BI list " ID [LIMIT]"
+List findings for a session.
+.TP
+.BI finding " FINDING_ID"
+Show one finding and its provenance.
+.TP
+.B shutdown
+Request an orderly daemon shutdown.
+.SH SEE ALSO
+.BR ctf-hunter (1),
+.BR ctf-hunterd (1)

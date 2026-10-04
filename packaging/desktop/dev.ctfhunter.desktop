@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=CTF Hunter
+GenericName=CTF Flag Analyzer
+Comment=Find and decode CTF flags from local sources
+Exec=ctf-hunter
+Icon=dev.ctfhunter.desktop
+Terminal=false
+Categories=System;Security;
+Keywords=CTF;Flag;Decoder;Security;
+StartupNotify=true
+StartupWMClass=dev.ctfhunter.desktop

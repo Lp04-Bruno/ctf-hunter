@@ -1,0 +1,60 @@
+.TH CTF-HUNTER-CAPTURE 8 "September 2026" "CTF Hunter 0.1.0" "System Administration"
+.SH NAME
+ctf-hunter-capture \- provide capability-bound terminal capture for CTF Hunter
+.SH SYNOPSIS
+.B ctf-hunter-capture preflight
+.br
+.B ctf-hunter-capture gate
+.br
+.B ctf-hunter-capture serve --socket
+.I PATH
+.RB [ --max-connections " N" ]
+.br
+.B ctf-hunter-capture run --uid
+.I UID
+.B --tty
+.I PATH
+.RB [ --tty " PATH ..." ]
+.RB [ --duration-seconds " N" ]
+.RB [ --show-payload ]
+.SH DESCRIPTION
+.B ctf-hunter-capture
+is the privileged, capability-bound capture component. Production use is through
+the system service and the
+.B serve
+command. The helper authenticates local clients and exposes only bounded events
+accepted by the kernel privacy policy.
+.PP
+The diagnostic
+.B run
+mode is intended for controlled validation. Its
+.B --show-payload
+option prints accepted payload bytes and should not be enabled in routine service
+operation.
+.SH COMMANDS
+.TP
+.B preflight
+Validate the running kernel's BTF layout and required terminal structures.
+.TP
+.B gate
+Print the compiled privacy-gate controls.
+.TP
+.B serve
+Serve authenticated daemon clients on a local Unix socket.
+.TP
+.B run
+Run a time-bounded diagnostic capture for one UID and one or more terminals.
+.SH FILES
+.TP
+.I /run/ctf-hunter/capture.sock
+Default production helper socket.
+.TP
+.I /usr/lib/sysusers.d/ctf-hunter.conf
+Declarative system-group definition. Membership grants access to the helper
+socket but does not bypass per-peer UID and terminal-ownership checks.
+.TP
+.I /sys/kernel/btf/vmlinux
+Running-kernel BTF metadata.
+.SH SEE ALSO
+.BR ctf-hunterd (1),
+.BR systemd.service (5)

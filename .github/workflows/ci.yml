@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+      - master
+      - release/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Source and native release gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install isolated-build prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends podman
+
+      - name: Validate systemd units on the runner
+        run: |
+          python3 scripts/verify-service-lifecycle.py
+          scripts/verify-systemd-units.sh
+
+      - name: Prepare pinned Debian 12 builder
+        run: |
+          . release/build-environment.env
+          scripts/podman-release.sh pull "$DEBIAN_IMAGE"
+          scripts/build-release-container.sh
+
+      - name: Run complete quality gates
+        run: |
+          . release/build-environment.env
+          scripts/podman-release.sh run --rm \
+            --security-opt label=disable \
+            --volume "$PWD:/workspace:rw" \
+            --workdir /workspace \
+            "localhost/ctf-hunter-build:0.1.0-bookworm" \
+            scripts/run-ci-gates.sh

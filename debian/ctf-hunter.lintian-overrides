@@ -1,0 +1,3 @@
+# CTF Hunter is distributed through its own APT repository, not uploaded to
+# Debian, so there is no Debian ITP bug for this initial package.
+ctf-hunter: initial-upload-closes-no-bugs

@@ -1,0 +1,22 @@
+# CTF Hunter source package
+
+The source package is built by a pinned release environment. In addition to the
+dependencies declared in `debian/control`, that environment provides the Rust
+stable and nightly toolchains selected by the repository and the verified
+prebuilt `bpf-linker` 0.11.1 executable.
+
+Cargo and npm are run in offline mode during `dpkg-buildpackage`. The release
+environment must populate their content-addressed caches from `Cargo.lock` and
+`package-lock.json` before invoking the Debian build. Network access during
+`debian/rules` is not permitted.
+
+The privileged capture helper's build script compiles the eBPF program with the
+nightly toolchain and embeds the complete eBPF ELF in the helper. The build fails
+if `scripts/verify-embedded-ebpf.py` cannot prove that embedding. No separate eBPF
+object is installed in the binary package.
+
+`scripts/build-debian-package.sh` sets `DEB_BUILD_OPTIONS=nocheck` by default
+because the repository's full Rust and frontend test gates run before packaging.
+Unset that behavior by invoking the Debian build directly when package-build test
+execution is required. The `debian/rules` test override remains enabled and honors
+the standard `nocheck` option.

@@ -1,0 +1,134 @@
+#!/usr/bin/expect -f
+
+set timeout 35
+
+if {[exec id -u] != 0} {
+    puts stderr "Run this packaged live-capture test with sudo."
+    exit 2
+}
+if {![info exists env(SUDO_USER)] || $env(SUDO_USER) eq "root"} {
+    puts stderr "Run this test as a regular user through sudo."
+    exit 2
+}
+if {$argc > 1} {
+    puts stderr "usage: sudo scripts/test-packaged-capture.exp \[PACKAGE\]"
+    exit 2
+}
+
+set workspace [file normalize [file join [file dirname [info script]] ..]]
+if {$argc == 1} {
+    set package [file normalize [lindex $argv 0]]
+} else {
+    set package [file join $workspace artifacts bookworm ctf-hunter_0.1.0-1_amd64.deb]
+}
+if {![file exists $package]} {
+    puts stderr "Package not found: $package"
+    exit 2
+}
+
+set test_user $env(SUDO_USER)
+set test_uid [string trim [exec id -u $test_user]]
+set test_gid [string trim [exec id -g $test_user]]
+set test_root "/tmp/ctf-hunter-package-live-$test_uid-[pid]"
+set output [file join $test_root capture.log]
+set drop "setpriv --reuid=$test_uid --regid=$test_gid --init-groups"
+
+file mkdir $test_root
+exec dpkg-deb --extract $package $test_root/root
+set capture [file join $test_root root usr libexec ctf-hunter-capture]
+if {![file executable $capture]} {
+    puts stderr "Packaged capture helper is missing."
+    file delete -force $test_root
+    exit 2
+}
+
+spawn -noecho env PS1=PACKAGEPROMPT bash --noprofile --norc -i
+expect "PACKAGEPROMPT"
+send -- "set -m\r"
+expect "PACKAGEPROMPT"
+send -- "$capture run --uid $test_uid --tty \$(tty) --duration-seconds 15 --show-payload >$output 2>&1 &\r"
+expect "PACKAGEPROMPT"
+send -- "capture_pid=\$!\r"
+expect "PACKAGEPROMPT"
+
+set ready 0
+for {set attempt 0} {$attempt < 120} {incr attempt} {
+    if {[file exists $output]} {
+        set handle [open $output r]
+        set startup [read $handle]
+        close $handle
+        if {[string match "*capture ready*" $startup]} {
+            set ready 1
+            break
+        }
+    }
+    after 100
+}
+if {!$ready} {
+    send -- "kill \$capture_pid 2>/dev/null; wait \$capture_pid 2>/dev/null\r"
+    puts stderr "FAIL: packaged capture helper did not become ready"
+    if {[file exists $output]} {
+        set handle [open $output r]
+        puts stderr [read $handle]
+        close $handle
+    }
+    file delete -force $test_root
+    exit 1
+}
+
+send -- "$drop /usr/bin/printf 'PACKAGE_INITIAL_FILTER\n'\r"
+expect "PACKAGE_INITIAL_FILTER"
+expect "PACKAGEPROMPT"
+send -- "$drop /usr/bin/printf 'PACKAGE_SAFE_CAPTURE\n'\r"
+expect "PACKAGE_SAFE_CAPTURE"
+expect "PACKAGEPROMPT"
+send -- "$drop python3 -c 'value=input(\"PROMPT: \" ); print(\"LEAK:\" + value)'\r"
+expect "PROMPT: "
+send -- "PACKAGE_PRIVATE_INPUT\r"
+expect "LEAK:PACKAGE_PRIVATE_INPUT"
+expect "PACKAGEPROMPT"
+send -- "$drop sh -c 'printf \"PACKAGE_BACKGROUND\\n\"' &\r"
+expect "PACKAGE_BACKGROUND"
+expect "PACKAGEPROMPT"
+send -- "wait \$capture_pid\r"
+expect "PACKAGEPROMPT"
+send -- "exit\r"
+expect eof
+
+set handle [open $output r]
+set result [read $handle]
+close $handle
+set failures {}
+if {![string match "*PACKAGE_SAFE_CAPTURE*" $result]} {
+    lappend failures "safe foreground output was not captured"
+}
+foreach forbidden {PACKAGE_INITIAL_FILTER PACKAGE_PRIVATE_INPUT LEAK: PACKAGE_BACKGROUND} {
+    if {[string match "*$forbidden*" $result]} {
+        lappend failures "privacy-filtered marker captured: $forbidden"
+    }
+}
+foreach zero_counter {structure_failed map_failed fail_closed ring_dropped read_failed} {
+    if {![regexp "${zero_counter}=0(?: |$)" $result]} {
+        lappend failures "$zero_counter is missing or nonzero"
+    }
+}
+if {![string match "*failure_reason=none*" $result]} {
+    lappend failures "failure_reason is not none"
+}
+foreach positive_counter {accepted read_marked taint_filtered initial_filtered background_filtered} {
+    if {![regexp "${positive_counter}=\[1-9\]\[0-9\]*" $result]} {
+        lappend failures "$positive_counter is missing or zero"
+    }
+}
+
+puts "--- packaged capture log ---"
+puts -nonewline $result
+if {[llength $failures] != 0} {
+    foreach failure $failures {
+        puts stderr "FAIL: $failure"
+    }
+    file delete -force $test_root
+    exit 1
+}
+file delete -force $test_root
+puts "PASS: packaged privileged capture and privacy policy validated"

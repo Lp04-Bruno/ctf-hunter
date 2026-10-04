@@ -1,0 +1,20 @@
+[package]
+name = "hunter-scoring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+hunter-decoder = { path = "../hunter-decoder" }
+hunter-flags = { path = "../hunter-flags" }
+hunter-types = { path = "../hunter-types" }
+serde_json.workspace = true
+
+[lints]
+workspace = true
