@@ -14,6 +14,7 @@ members = [
     "crates/hunter-parser",
     "crates/hunter-scoring",
     "crates/hunter-types",
+    "crates/ctf-hunter-setup",
     "daemon/ctf-hunterd",
     "ui/src-tauri",
 ]
@@ -30,6 +31,7 @@ default-members = [
     "crates/hunter-parser",
     "crates/hunter-scoring",
     "crates/hunter-types",
+    "crates/ctf-hunter-setup",
     "daemon/ctf-hunterd",
     "ui/src-tauri",
 ]
@@ -38,6 +40,11 @@ default-members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98"
+authors = ["Lp04-Bruno <88251364+lp04-Bruno@users.noreply.github.com>"]
+description = "Linux-first passive CTF flag discovery for terminals and files"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Lp04-Bruno/ctf-hunter"
+readme = "README.md"
 
 [workspace.dependencies]
 anyhow = "1.0"

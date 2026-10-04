@@ -1,0 +1,42 @@
+Source: ctf-hunter
+Section: utils
+Priority: optional
+Maintainer: Lp04-Bruno <88251364+lp04-Bruno@users.noreply.github.com>
+Build-Depends:
+ cargo,
+ debhelper-compat (= 13),
+ file,
+ imagemagick,
+ libayatana-appindicator3-dev,
+ libdbus-1-dev,
+ libgtk-3-dev,
+ librsvg2-dev,
+ libssl-dev,
+ libwebkit2gtk-4.1-dev,
+ libxdo-dev,
+ llvm,
+ nodejs,
+ pkg-config,
+ python3,
+ rustc
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/Lp04-Bruno/ctf-hunter
+Vcs-Browser: https://github.com/Lp04-Bruno/ctf-hunter
+Vcs-Git: https://github.com/Lp04-Bruno/ctf-hunter.git
+
+Package: ctf-hunter
+Architecture: amd64
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+ pkexec,
+ systemd
+Description: local-first CTF flag discovery desktop application
+ CTF Hunter passively finds CTF flags in selected terminal output and watched
+ files, and analyzes manually submitted data. It preserves provenance across
+ bounded recursive decoding and stores findings in a per-user SQLite database.
+ .
+ The package contains a native desktop interface, an unprivileged per-user
+ analysis daemon, a diagnostic command-line client, and a narrowly privileged
+ eBPF terminal capture helper.

@@ -1,0 +1,251 @@
+#!/usr/bin/expect -f
+
+set timeout 50
+log_user 0
+
+if {[exec id -u] != 0} {
+    puts stderr "Run this packaged daemon/capture test with sudo."
+    exit 2
+}
+if {![info exists env(SUDO_USER)] || $env(SUDO_USER) eq "root"} {
+    puts stderr "Run this test as a regular user through sudo."
+    exit 2
+}
+if {$argc > 1} {
+    puts stderr "usage: sudo scripts/test-packaged-daemon-capture.exp \[PACKAGE\]"
+    exit 2
+}
+
+set workspace [file normalize [file join [file dirname [info script]] ..]]
+if {$argc == 1} {
+    set package [file normalize [lindex $argv 0]]
+} else {
+    set package [file join $workspace artifacts release-candidate build-a ctf-hunter_0.1.0~rc2-1_amd64.deb]
+}
+if {![file exists $package]} {
+    puts stderr "Package not found: $package"
+    exit 2
+}
+
+set test_user $env(SUDO_USER)
+set test_uid [string trim [exec id -u $test_user]]
+set test_gid [string trim [exec id -g $test_user]]
+set test_root "/tmp/ctf-hunter-package-integration-$test_uid-[pid]"
+set package_root [file join $test_root root]
+set helper_dir [file join $test_root helper]
+set user_dir [file join $test_root user]
+set helper_socket [file join $helper_dir capture.sock]
+set daemon_socket [file join $user_dir daemon.sock]
+set database [file join $user_dir hunter.db]
+set helper_log [file join $test_root helper.log]
+set daemon_log [file join $test_root daemon.log]
+set tty_file [file join $test_root tty]
+set stress_result [file join $test_root stress]
+set drop [list setpriv --reuid=$test_uid --regid=$test_gid --init-groups]
+set drop_command "setpriv --reuid=$test_uid --regid=$test_gid --init-groups"
+
+file mkdir $test_root
+exec dpkg-deb --extract $package $package_root
+set capture [file join $package_root usr libexec ctf-hunter-capture]
+set daemon [file join $package_root usr bin ctf-hunterd]
+set control [file join $package_root usr bin ctf-hunterctl]
+foreach binary [list $capture $daemon $control] {
+    if {![file executable $binary]} {
+        puts stderr "Packaged binary is missing: $binary"
+        file delete -force $test_root
+        exit 2
+    }
+}
+
+proc run_user {drop args} {
+    return [exec {*}$drop {*}$args]
+}
+
+proc wait_for_path {path} {
+    for {set attempt 0} {$attempt < 150} {incr attempt} {
+        if {[file exists $path]} {
+            return 1
+        }
+        after 100
+    }
+    return 0
+}
+
+proc read_file {path} {
+    if {![file exists $path]} {
+        return ""
+    }
+    set handle [open $path r]
+    set value [read $handle]
+    close $handle
+    return $value
+}
+
+proc stop_processes {} {
+    global spawn_id
+    catch {send -- "kill \$daemon_pid \$helper_pid 2>/dev/null; wait \$daemon_pid 2>/dev/null; wait \$helper_pid 2>/dev/null\r"}
+    catch {expect "PACKAGE7PROMPT"}
+    catch {send -- "exit\r"}
+    catch {expect eof}
+}
+
+spawn -noecho env PS1=PACKAGE7PROMPT bash --noprofile --norc -i
+expect "PACKAGE7PROMPT"
+send -- "set -m\r"
+expect "PACKAGE7PROMPT"
+send -- "tty >$tty_file\r"
+expect "PACKAGE7PROMPT"
+set tty_path [string trim [read_file $tty_file]]
+
+send -- "install -d -m 0750 -o root -g $test_gid $helper_dir; install -d -m 0700 -o $test_uid -g $test_gid $user_dir; chown $test_uid:$test_gid $tty_path\r"
+expect "PACKAGE7PROMPT"
+
+puts "Starting packaged privileged capture and unprivileged daemon..."
+send -- "setpriv --regid=$test_gid --clear-groups $capture serve --socket $helper_socket >$helper_log 2>&1 &\r"
+expect "PACKAGE7PROMPT"
+send -- "helper_pid=\$!\r"
+expect "PACKAGE7PROMPT"
+if {![wait_for_path $helper_socket]} {
+    puts stderr "FAIL: packaged capture socket did not appear"
+    puts stderr [read_file $helper_log]
+    stop_processes
+    file delete -force $test_root
+    exit 1
+}
+
+send -- "$drop_command $daemon --database $database --socket $daemon_socket --capture-socket $helper_socket >$daemon_log 2>&1 &\r"
+expect "PACKAGE7PROMPT"
+send -- "daemon_pid=\$!\r"
+expect "PACKAGE7PROMPT"
+if {![wait_for_path $daemon_socket]} {
+    puts stderr "FAIL: packaged daemon socket did not appear"
+    puts stderr [read_file $daemon_log]
+    stop_processes
+    file delete -force $test_root
+    exit 1
+}
+
+set created [run_user $drop $control --socket $daemon_socket create "Packaged capture" "FLAG{*}"]
+if {![regexp {"id": "([0-9a-f-]{36})"} $created _ session_id]} {
+    puts stderr "FAIL: could not read packaged session ID"
+    stop_processes
+    file delete -force $test_root
+    exit 1
+}
+run_user $drop $control --socket $daemon_socket add-terminal $session_id $tty_path
+run_user $drop $control --socket $daemon_socket start $session_id
+
+set connected 0
+for {set attempt 0} {$attempt < 150} {incr attempt} {
+    set status [run_user $drop $control --socket $daemon_socket status]
+    if {[regexp {"connected_sources": 1} $status]} {
+        set connected 1
+        break
+    }
+    after 100
+}
+if {!$connected} {
+    puts stderr "FAIL: packaged daemon did not authenticate the capture stream"
+    stop_processes
+    file delete -force $test_root
+    exit 1
+}
+
+puts "Checking packaged foreground capture and privacy filters..."
+send -- "$drop_command /usr/bin/printf 'FLAG{PACKAGE_INITIAL_FILTER}\n'\r"
+expect "FLAG{PACKAGE_INITIAL_FILTER}"
+expect "PACKAGE7PROMPT"
+send -- "$drop_command /usr/bin/printf 'FLAG{package_daemon_capture}\n'\r"
+expect "FLAG{package_daemon_capture}"
+expect "PACKAGE7PROMPT"
+send -- "$drop_command python3 -c 'value=input(\"PROMPT: \" ); print(\"LEAK:\" + value)'\r"
+expect "PROMPT: "
+send -- "FLAG{PACKAGE_PRIVATE_INPUT}\r"
+expect "LEAK:FLAG{PACKAGE_PRIVATE_INPUT}"
+expect "PACKAGE7PROMPT"
+send -- "$drop_command sh -c 'printf \"FLAG{PACKAGE_BACKGROUND}\\n\"' &\r"
+expect "FLAG{PACKAGE_BACKGROUND}"
+expect "PACKAGE7PROMPT"
+
+set findings ""
+set found 0
+for {set attempt 0} {$attempt < 150} {incr attempt} {
+    set findings [run_user $drop $control --socket $daemon_socket list $session_id 50]
+    if {[string match "*FLAG{package_daemon_capture}*" $findings]} {
+        set found 1
+        break
+    }
+    after 100
+}
+
+puts "Checking packaged capture backpressure isolation..."
+set stress_command [format {%s python3 -c 'import os,sys,time; start=time.monotonic_ns(); fd=os.open(sys.argv[1], os.O_WRONLY); [os.writev(fd, (b"PACKAGE_STRESS", b"\n")) for _ in range(1000)]; os.close(fd); print(time.monotonic_ns()-start)' %s >%s} $drop_command $tty_path $stress_result]
+send -- "$stress_command\r"
+expect "PACKAGE7PROMPT"
+set stress_ns [string trim [read_file $stress_result]]
+
+set status [run_user $drop $control --socket $daemon_socket status]
+set failures {}
+if {!$found} {
+    lappend failures "safe terminal flag did not reach the packaged daemon"
+}
+foreach forbidden {
+    FLAG{PACKAGE_INITIAL_FILTER}
+    FLAG{PACKAGE_PRIVATE_INPUT}
+    FLAG{PACKAGE_BACKGROUND}
+} {
+    if {[string match "*$forbidden*" $findings]} {
+        lappend failures "privacy-filtered value became a finding: $forbidden"
+    }
+}
+if {![regexp {^[0-9]+$} $stress_ns] || $stress_ns > 10000000000} {
+    lappend failures "1000 foreground writes did not complete within ten seconds"
+}
+foreach zero_counter {protocol_errors helper_errors ring_dropped read_failed fail_closed} {
+    if {![regexp "\"${zero_counter}\": 0(?:,|\\n)" $status]} {
+        lappend failures "$zero_counter is missing or nonzero"
+    }
+}
+foreach positive_counter {events_received events_analyzed} {
+    set pattern [format {"%s": [1-9][0-9]*} $positive_counter]
+    if {![regexp $pattern $status]} {
+        lappend failures "$positive_counter is missing or zero"
+    }
+}
+
+run_user $drop $control --socket $daemon_socket pause $session_id
+set disconnected 0
+for {set attempt 0} {$attempt < 50} {incr attempt} {
+    set paused_status [run_user $drop $control --socket $daemon_socket status]
+    if {[regexp {"active_sources": 0} $paused_status] && [regexp {"connected_sources": 0} $paused_status]} {
+        set disconnected 1
+        break
+    }
+    after 100
+}
+if {!$disconnected} {
+    lappend failures "packaged capture stream remained active after pause"
+}
+
+catch {run_user $drop $control --socket $daemon_socket shutdown}
+after 300
+stop_processes
+
+puts "--- packaged daemon capture status ---"
+puts $status
+puts "--- packaged stress result ---"
+puts "completed 1000 vectored writes in $stress_ns ns"
+if {[llength $failures] != 0} {
+    puts "--- helper log ---"
+    puts -nonewline [read_file $helper_log]
+    puts "--- daemon log ---"
+    puts -nonewline [read_file $daemon_log]
+    foreach failure $failures {
+        puts stderr "FAIL: $failure"
+    }
+    file delete -force $test_root
+    exit 1
+}
+
+file delete -force $test_root
+puts "PASS: packaged Phase 7 daemon/capture integration validated"

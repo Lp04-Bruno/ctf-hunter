@@ -2,6 +2,16 @@
 
 CTF Hunter is a Linux-first application for passively finding CTF flags in terminal output, watched files, and manually submitted data.
 
+<p align="center">
+  <a href="docs/media/ctf-hunter-launch.mp4">
+    <img src="docs/media/ctf-hunter-launch-preview.webp" width="960" alt="CTF Hunter in 23 seconds: a terminal hides a gzip- and Base64-encoded flag, CTF Hunter watches terminals and folders, peels the blob layer by layer to HTB{layer_by_layer}, and shows the finding with its full transformation path." />
+  </a>
+</p>
+<p align="center">
+  <a href="docs/media/ctf-hunter-launch.mp4">Watch the 23-second film with sound (MP4)</a> ·
+  <a href="https://ctf-hunter.lennardpreusker.com/">ctf-hunter.lennardpreusker.com</a>
+</p>
+
 The project is in active development. The current implementation provides a bounded analysis engine, SQLite persistence, an unprivileged per-user daemon with versioned Unix-socket IPC, inotify-backed file collection, integrated read-tainted foreground-TTY capture, and a native Tauri and Svelte desktop interface. The capture service runs beside ordinary terminals without wrapping commands and forwards only kernel-filtered, bounded output to the daemon.
 
 ## Requirements
@@ -23,6 +33,42 @@ cd ui && npm ci && npm run check && npm test && npm run build
 ```
 
 Development follows Git Flow: feature branches merge into `develop`, while `master` remains releasable.
+
+## Debian installation
+
+Install a downloaded package with APT so normal repository dependencies are resolved:
+
+```bash
+sudo apt install ./ctf-hunter_0.1.0-1_amd64.deb
+```
+
+The desktop application, decoder, file collection, database, and per-user daemon
+are available immediately. The application starts its packaged user service on
+first launch when necessary. Terminal capture is an explicit one-time opt-in
+because it connects to the capability-bound system helper. Open **Settings →
+System readiness**, select **Enable terminal capture**, approve the administrator
+dialog, then sign out of the Linux desktop and sign back in once.
+
+The equivalent recovery command is:
+
+```bash
+sudo usermod -aG ctf-hunter "$USER"
+```
+
+Package installation never guesses a `$SUDO_USER` or silently changes account
+memberships. Removing or purging the package never deletes data below
+`~/.local/share/ctf-hunter`.
+
+Release compatibility, versioning, and data-retention guarantees are documented in
+[`docs/release-policy.md`](docs/release-policy.md). The permission-separated CI,
+signing, draft-release, and APT-promotion process is documented in
+[`docs/release-automation.md`](docs/release-automation.md). Release metadata is
+validated with:
+
+```bash
+python3 scripts/check-release-metadata.py
+python3 scripts/verify-workflows.py
+```
 
 ## Daemon
 
@@ -61,4 +107,11 @@ sudo -g "$(id -gn)" target/debug/ctf-hunter-capture serve --socket /run/ctf-hunt
 target/debug/ctf-hunterd --capture-socket /run/ctf-hunter/capture.sock
 ```
 
-The production units are in `packaging/systemd/`. The system helper is restricted to `CAP_BPF`, `CAP_PERFMON`, Unix sockets, and a hardened filesystem view. The per-user daemon remains unprivileged. Membership in the package-created `ctf-hunter` group grants access to the helper socket; add the intended desktop user to that group during installation and start a new login session before enabling capture. The helper still limits each client to terminals owned by its authenticated UID.
+The production units are in `packaging/systemd/`. The system helper is restricted to `CAP_BPF`, `CAP_PERFMON`, Unix sockets, and a hardened filesystem view. The per-user daemon remains unprivileged. Membership in the package-created `ctf-hunter` group grants access to the helper socket; the guided Settings action adds only the authenticated desktop account after explicit administrator approval. A new login session activates the membership. The helper still limits each client to terminals owned by its authenticated UID.
+
+## License
+
+Copyright 2026 Lp04-Bruno.
+
+CTF Hunter is licensed under either the Apache License, Version 2.0 or the MIT License,
+at your option. See [`LICENSE-APACHE`](LICENSE-APACHE) and [`LICENSE-MIT`](LICENSE-MIT).

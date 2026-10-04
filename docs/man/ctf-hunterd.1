@@ -1,0 +1,27 @@
+.TH CTF-HUNTERD 1 "September 2026" "CTF Hunter 0.1.0" "User Commands"
+.SH NAME
+ctf-hunterd \- run the unprivileged CTF Hunter analysis daemon
+.SH SYNOPSIS
+.B ctf-hunterd
+.RB [ --database " PATH" ]
+.RB [ --socket " PATH" ]
+.RB [ --capture-socket " PATH" ]
+.SH DESCRIPTION
+.B ctf-hunterd
+collects explicitly configured file and terminal events, performs bounded flag
+analysis, persists findings, and serves the versioned local IPC protocol. It is
+designed to run as an unprivileged per-user systemd service.
+.SH OPTIONS
+.TP
+.BI --database " PATH"
+Set the SQLite database path.
+.TP
+.BI --socket " PATH"
+Set the per-user IPC socket path.
+.TP
+.BI --capture-socket " PATH"
+Set the privileged capture helper socket path.
+.SH SEE ALSO
+.BR ctf-hunter (1),
+.BR ctf-hunterctl (1),
+.BR ctf-hunter-capture (1)

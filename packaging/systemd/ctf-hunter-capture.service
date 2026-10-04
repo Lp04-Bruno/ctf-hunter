@@ -1,5 +1,6 @@
 [Unit]
 Description=CTF Hunter privileged terminal capture service
+Documentation=man:ctf-hunter-capture(8)
 After=local-fs.target
 
 [Service]

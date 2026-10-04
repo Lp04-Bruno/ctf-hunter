@@ -1,0 +1,82 @@
+name: Package validation
+
+on:
+  push:
+    branches:
+      - release/**
+  workflow_dispatch:
+    inputs:
+      run_reprotest:
+        description: Run the extended reprotest perturbation matrix
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Reproducible Debian package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install package-test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            diffoscope disorderfs podman reprotest rsync
+
+      - name: Prepare pinned release images
+        run: |
+          . release/build-environment.env
+          scripts/podman-release.sh pull "$DEBIAN_IMAGE"
+          scripts/podman-release.sh pull "$KALI_IMAGE"
+          scripts/build-release-container.sh
+
+      - name: Build twice and compare packages
+        run: scripts/verify-reproducible-build.sh
+
+      - name: Validate install, upgrade, remove, and purge
+        run: >-
+          scripts/test-package-lifecycle.sh
+          artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+
+      - name: Validate missing and malformed BTF handling
+        run: >-
+          scripts/test-btf-failures.sh
+          artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+
+      - name: Build unsigned internal evidence
+        run: >-
+          scripts/create-release-artifacts.sh
+          artifacts/reproducible/build-a
+
+      - name: Run extended reproducibility perturbations
+        if: github.event_name == 'workflow_dispatch' && inputs.run_reprotest
+        run: scripts/reprotest-release.sh
+
+      - name: Upload internal package evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ctf-hunter-${{ github.sha }}-amd64
+          path: |
+            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+            artifacts/reproducible/build-a/ctf-hunter-dbgsym_0.1.0-1_amd64.deb
+            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.buildinfo
+            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.changes
+            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.spdx.json
+            artifacts/reproducible/build-a/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

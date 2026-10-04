@@ -1,0 +1,82 @@
+ARG DEBIAN_IMAGE
+FROM ${DEBIAN_IMAGE}
+
+ARG RUST_STABLE
+ARG RUST_NIGHTLY
+ARG RUSTUP_INIT_SHA256
+ARG NODE_VERSION
+ARG NODE_SHA256
+ARG BPF_LINKER_VERSION
+ARG BPF_LINKER_SHA256
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    CARGO_INCREMENTAL=0 \
+    CTF_HUNTER_REQUIRE_BOOKWORM=1 \
+    PATH=/opt/cargo/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential \
+      ca-certificates \
+      cargo \
+      curl \
+      debhelper \
+      dpkg-dev \
+      file \
+      git \
+      imagemagick \
+      libayatana-appindicator3-dev \
+      libdbus-1-dev \
+      libgtk-3-dev \
+      librsvg2-dev \
+      libssl-dev \
+      libwebkit2gtk-4.1-dev \
+      libxdo-dev \
+      lintian \
+      llvm \
+      nodejs \
+      pkg-config \
+      python3 \
+      rsync \
+      rustc \
+      xz-utils \
+      zstd \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -fsSL \
+      "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+      -o /tmp/node.tar.xz \
+ && echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum --check --strict \
+ && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+ && rm /tmp/node.tar.xz \
+ && node --version \
+ && npm --version
+
+RUN curl --proto '=https' --tlsv1.2 -fsSL \
+      https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init \
+      -o /tmp/rustup-init \
+ && echo "${RUSTUP_INIT_SHA256}  /tmp/rustup-init" | sha256sum --check --strict \
+ && chmod 0755 /tmp/rustup-init \
+ && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain none \
+ && rm /tmp/rustup-init \
+ && rustup toolchain install "${RUST_STABLE}" --profile minimal --component clippy --component rustfmt \
+ && rustup toolchain install "${RUST_NIGHTLY}" --profile minimal --component rust-src \
+ && rustup default "${RUST_STABLE}"
+
+RUN curl --proto '=https' --tlsv1.2 -fL \
+      "https://github.com/aya-rs/bpf-linker/releases/download/v${BPF_LINKER_VERSION}/bpf-linker-x86_64-unknown-linux-musl.tar.zst" \
+      -o /tmp/bpf-linker.tar.zst \
+ && echo "${BPF_LINKER_SHA256}  /tmp/bpf-linker.tar.zst" | sha256sum --check --strict \
+ && tar --zstd -xf /tmp/bpf-linker.tar.zst -C /usr/local/bin \
+ && chmod 0755 /usr/local/bin/bpf-linker \
+ && rm /tmp/bpf-linker.tar.zst \
+ && bpf-linker --version
+
+LABEL org.opencontainers.image.source="https://github.com/Lp04-Bruno/ctf-hunter" \
+      org.opencontainers.image.title="CTF Hunter Debian 12 release builder" \
+      org.opencontainers.image.version="0.1.0"
