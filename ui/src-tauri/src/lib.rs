@@ -1,3 +1,6 @@
+#[cfg(all(not(debug_assertions), not(feature = "custom-protocol")))]
+compile_error!("release builds must enable the custom-protocol feature");
+
 use std::{
     env, fs,
     os::unix::fs::{FileTypeExt, PermissionsExt},

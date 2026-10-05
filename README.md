@@ -39,7 +39,7 @@ Development follows Git Flow: feature branches merge into `develop`, while `mast
 Install a downloaded package with APT so normal repository dependencies are resolved:
 
 ```bash
-sudo apt install ./ctf-hunter_0.1.0-1_amd64.deb
+sudo apt install ./ctf-hunter_0.1.1-1_amd64.deb
 ```
 
 The desktop application, decoder, file collection, database, and per-user daemon

@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "ctf-hunter-capture"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "aya",
@@ -637,11 +637,11 @@ dependencies = [
 
 [[package]]
 name = "ctf-hunter-common"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "ctf-hunter-ebpf"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aya-ebpf",
  "ctf-hunter-common",
@@ -650,14 +650,14 @@ dependencies = [
 
 [[package]]
 name = "ctf-hunter-setup"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nix",
 ]
 
 [[package]]
 name = "ctf-hunter-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hunter-ipc",
  "hunter-types",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "ctf-hunterd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "hunter-capture-client",
@@ -1551,7 +1551,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "hunter-capture-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hunter-capture-protocol",
  "hunter-types",
@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-capture-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1571,7 +1571,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-collectors"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "blake3",
  "hunter-types",
@@ -1583,7 +1583,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-database"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hunter-core",
  "hunter-flags",
@@ -1612,7 +1612,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-decoder"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "bzip2",
@@ -1623,7 +1623,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-flags"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hunter-types",
  "regex",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-ipc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hunter-types",
  "serde",
@@ -1642,7 +1642,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-parser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hunter-types",
  "serde_json",
@@ -1651,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-scoring"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hunter-decoder",
  "hunter-flags",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "hunter-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",

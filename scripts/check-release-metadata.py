@@ -76,7 +76,12 @@ def main() -> int:
     expect(errors, "license", metadata["license"], "MIT OR Apache-2.0")
     expect(errors, "copyright holder", metadata["copyright_holder"], "Lp04-Bruno")
     expect(errors, "maintainer", maintainer, metadata["git_flow"]["tag_signing_identity"])
-    expect(errors, "release branch", metadata["git_flow"]["release_branch"], f"release/{version}")
+    release_branch = metadata["git_flow"]["release_branch"]
+    if release_branch not in {f"release/{version}", f"hotfix/{version}"}:
+        errors.append(
+            "release branch: expected "
+            f"'release/{version}' or 'hotfix/{version}', found {release_branch!r}"
+        )
     expect(errors, "release tag", metadata["git_flow"]["release_tag"], f"v{version}")
 
     workspace = load_toml(ROOT / "Cargo.toml")["workspace"]["package"]

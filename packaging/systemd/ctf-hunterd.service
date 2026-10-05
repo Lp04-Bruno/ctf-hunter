@@ -7,6 +7,8 @@ ExecStart=/usr/bin/ctf-hunterd --database %h/.local/share/ctf-hunter/hunter.db -
 Restart=on-failure
 RestartSec=2s
 UMask=0077
+RuntimeDirectory=ctf-hunter
+RuntimeDirectoryMode=0700
 
 NoNewPrivileges=yes
 LockPersonality=yes

@@ -45,6 +45,16 @@ def main() -> int:
     require("User=root" not in daemon_unit, "user daemon must not declare root execution", errors)
     require("WantedBy=default.target" in daemon_unit, "user daemon is not enabled for desktop sessions", errors)
     require("UMask=0077" in daemon_unit, "user daemon must retain a private umask", errors)
+    require(
+        "RuntimeDirectory=ctf-hunter" in daemon_unit,
+        "user daemon must create its runtime directory before namespace setup",
+        errors,
+    )
+    require(
+        "RuntimeDirectoryMode=0700" in daemon_unit,
+        "user daemon runtime directory must remain private",
+        errors,
+    )
 
     for integration in (
         "dh_installsystemd --restart-after-upgrade ctf-hunter-capture.service",

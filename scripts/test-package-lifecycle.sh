@@ -4,7 +4,7 @@ set -euo pipefail
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$project_root/release/build-environment.env"
 
-package=${1:-$project_root/artifacts/bookworm/ctf-hunter_0.1.0-1_amd64.deb}
+package=${1:-$project_root/artifacts/bookworm/ctf-hunter_0.1.1-1_amd64.deb}
 target=${2:-all}
 package=$(realpath "$package")
 test -f "$package" || {

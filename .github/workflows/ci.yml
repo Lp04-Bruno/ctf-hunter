@@ -6,7 +6,6 @@ on:
     branches:
       - develop
       - master
-      - release/**
 
 permissions:
   contents: read
@@ -16,8 +15,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  policy:
+    name: Policy and change scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      run_native: ${{ steps.scope.outputs.run_native }}
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release and workflow policy
+        run: |
+          python3 scripts/check-release-metadata.py
+          python3 scripts/verify-service-lifecycle.py
+          python3 scripts/verify-workflows.py
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+          scripts/verify-systemd-units.sh
+
+      - name: Classify pull request changes
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if test "$GITHUB_EVENT_NAME" = pull_request; then
+            python3 scripts/ci-change-scope.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo 'run_native=true' >> "$GITHUB_OUTPUT"
+          fi
+
   quality:
     name: Source and native release gates
+    needs: policy
+    if: needs.policy.outputs.run_native == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -49,5 +83,5 @@ jobs:
             --security-opt label=disable \
             --volume "$PWD:/workspace:rw" \
             --workdir /workspace \
-            "localhost/ctf-hunter-build:0.1.0-bookworm" \
+            "localhost/ctf-hunter-build:0.1.1-bookworm" \
             scripts/run-ci-gates.sh
