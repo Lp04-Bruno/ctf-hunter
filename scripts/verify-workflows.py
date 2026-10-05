@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -21,11 +22,15 @@ EXPECTED = {
     "publish-apt.yml",
 }
 ALLOWED_ACTIONS = {
-    "actions/checkout": "9f698171ed81b15d1823a05fc7211befd50c8ae0",
-    "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
-    "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093",
-    "actions/attest": "508db95dd578ae2727ebd6217d5ba78e4fbda05d",
+    "actions/attest",
+    "actions/checkout",
+    "actions/download-artifact",
+    "actions/upload-artifact",
 }
+ACTION_PATTERN = re.compile(
+    r"^\s*-?\s*uses:\s*([^@\s]+)@([^\s#]+)",
+    re.MULTILINE,
+)
 
 
 def require(condition: bool, message: str, errors: list[str]) -> None:
@@ -33,8 +38,39 @@ def require(condition: bool, message: str, errors: list[str]) -> None:
         errors.append(message)
 
 
+def action_reference_errors(contents: dict[str, str]) -> list[str]:
+    """Validate immutable, allowlisted, repository-wide consistent action pins."""
+
+    errors: list[str] = []
+    references: dict[str, set[str]] = {}
+    for name, text in sorted(contents.items()):
+        for action, reference in ACTION_PATTERN.findall(text):
+            require(
+                re.fullmatch(r"[0-9a-f]{40}", reference) is not None,
+                f"{name}: {action} is not pinned to a full commit SHA",
+                errors,
+            )
+            require(
+                action in ALLOWED_ACTIONS,
+                f"{name}: unreviewed external action {action}",
+                errors,
+            )
+            if action in ALLOWED_ACTIONS and re.fullmatch(r"[0-9a-f]{40}", reference):
+                references.setdefault(action, set()).add(reference)
+
+    for action, pins in sorted(references.items()):
+        if len(pins) > 1:
+            errors.append(
+                f"{action} must use one consistent commit SHA across all workflows"
+            )
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
+    with (ROOT / "release" / "metadata.toml").open("rb") as handle:
+        metadata = tomllib.load(handle)
+    candidate_branch = metadata["git_flow"]["release_branch"]
     paths = {path.name: path for path in WORKFLOW_DIR.glob("*.yml")}
     require(
         set(paths) == EXPECTED,
@@ -101,25 +137,11 @@ def main() -> int:
     )
 
     contents: dict[str, str] = {}
-    action_pattern = re.compile(r"^\s*-?\s*uses:\s*([^@\s]+)@([^\s#]+)", re.MULTILINE)
     for name, path in sorted(paths.items()):
         text = path.read_text(encoding="utf-8")
         contents[name] = text
         require("pull_request_target:" not in text, f"{name} uses pull_request_target", errors)
-        for action, reference in action_pattern.findall(text):
-            require(
-                re.fullmatch(r"[0-9a-f]{40}", reference) is not None,
-                f"{name}: {action} is not pinned to a full commit SHA",
-                errors,
-            )
-            expected = ALLOWED_ACTIONS.get(action)
-            require(expected is not None, f"{name}: unreviewed external action {action}", errors)
-            if expected is not None:
-                require(
-                    reference == expected,
-                    f"{name}: {action} pin differs from the reviewed commit",
-                    errors,
-                )
+    errors.extend(action_reference_errors(contents))
 
     for name in ("ci.yml", "package.yml"):
         text = contents.get(name, "")
@@ -129,6 +151,13 @@ def main() -> int:
         require("attestations: write" not in text, f"{name} must not publish attestations", errors)
 
     package = contents.get("package.yml", "")
+    require(
+        "workflow_dispatch:" in package
+        and "pull_request:" not in package
+        and "push:" not in package,
+        "package validation must remain manual-only",
+        errors,
+    )
     require(
         "diffoscope disorderfs podman reprotest rsync" in package,
         "package validation lacks complete reprotest prerequisites",
@@ -161,14 +190,14 @@ def main() -> int:
     candidate = contents.get("release-candidate.yml", "")
     require(
         "push:" in candidate
-        and "- release/0.1.0" in candidate
+        and f"- {candidate_branch}" in candidate
         and "pull_request:" not in candidate
         and "workflow_dispatch:" not in candidate,
         "release candidate must run only for release-branch pushes",
         errors,
     )
     require(
-        "github.ref == 'refs/heads/release/0.1.0'" in candidate,
+        f"github.ref == 'refs/heads/{candidate_branch}'" in candidate,
         "release candidate is not restricted to the release branch",
         errors,
     )
@@ -243,7 +272,7 @@ def main() -> int:
             print(f"- {error}", file=sys.stderr)
         return 1
 
-    action_count = sum(len(action_pattern.findall(text)) for text in contents.values())
+    action_count = sum(len(ACTION_PATTERN.findall(text)) for text in contents.values())
     print(f"Workflow policy valid: {len(paths)} workflows, {action_count} immutable action references")
     return 0
 

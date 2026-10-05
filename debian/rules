@@ -21,6 +21,7 @@ override_dh_auto_build:
 	npm --prefix ui ci --offline --ignore-scripts
 	npm --prefix ui run build
 	cargo build --release --locked \
+		--features ctf-hunter-ui/custom-protocol \
 		--package ctf-hunter-capture --bin ctf-hunter-capture \
 		--package ctf-hunter-setup --bin ctf-hunter-enable-capture \
 		--package ctf-hunterd --bins \

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-package=${1:-$project_root/artifacts/bookworm/ctf-hunter_0.1.0-1_amd64.deb}
+package=${1:-$project_root/artifacts/bookworm/ctf-hunter_0.1.1-1_amd64.deb}
 package=$(realpath "$package")
 test -f "$package" || {
     echo "package not found: $package" >&2
@@ -76,6 +76,8 @@ runuser -u ctfhuntertest -- env \
     XDG_RUNTIME_DIR=/run/user/2000 \
     DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/2000/bus \
     systemctl --user is-active --quiet ctf-hunterd.service
+test -d /run/user/2000/ctf-hunter
+test "$(stat -c %U:%G:%a /run/user/2000/ctf-hunter)" = ctfhuntertest:ctfhuntertest:700
 systemctl restart ctf-hunter-capture.service
 systemctl is-active --quiet ctf-hunter-capture.service
 TEST_SCRIPT

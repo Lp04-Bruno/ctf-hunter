@@ -48,7 +48,7 @@
 
   <div class="sidebar-foot">
     <span class="status-dot success"></span>
-    <span>Desktop 0.1.0</span>
+    <span>Desktop 0.1.1</span>
   </div>
 </aside>
 

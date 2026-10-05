@@ -19,7 +19,7 @@ set workspace [file normalize [file join [file dirname [info script]] ..]]
 if {$argc == 1} {
     set package [file normalize [lindex $argv 0]]
 } else {
-    set package [file join $workspace artifacts bookworm ctf-hunter_0.1.0-1_amd64.deb]
+    set package [file join $workspace artifacts bookworm ctf-hunter_0.1.1-1_amd64.deb]
 }
 if {![file exists $package]} {
     puts stderr "Package not found: $package"

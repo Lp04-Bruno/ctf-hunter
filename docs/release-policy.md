@@ -1,15 +1,15 @@
 # Release Policy
 
-This document defines the release contract for CTF Hunter `0.1.0`. Changes to this
-contract require review on the active release branch and must pass
+This document defines the release contract for CTF Hunter `0.1.1`. Changes to this
+contract require review on the active release or hotfix branch and must pass
 `python3 scripts/check-release-metadata.py`.
 
 ## Release identity
 
 - Product: CTF Hunter
-- Upstream version: `0.1.0`
-- Initial Debian version: `0.1.0-1`
-- Debian release-candidate form: `0.1.0~rc2-1`
+- Upstream version: `0.1.1`
+- Debian version: `0.1.1-1`
+- Debian release-candidate form: `0.1.1~rc1-1`
 - Architecture: `amd64`
 - Desktop identifier: `dev.ctfhunter.desktop`
 - Debian package and installed application name: `ctf-hunter`
@@ -29,7 +29,7 @@ APT publication does not change the package name or versioning scheme.
 
 ## Release freeze
 
-The `release/0.1.0` branch is cut from the completed `develop` branch. It accepts only:
+The `hotfix/0.1.1` branch is cut from the published `master` branch. It accepts only:
 
 - release metadata and packaging;
 - build, installation, upgrade, removal, and publication automation;
@@ -37,8 +37,8 @@ The `release/0.1.0` branch is cut from the completed `develop` branch. It accept
 - fixes for defects that block a release gate.
 
 New product features continue on feature branches based on `develop` and must not be
-merged into `release/0.1.0`. Release fixes are merged back into `develop` when the
-release branch closes.
+merged into `hotfix/0.1.1`. The hotfix is merged into both `master` and `develop`
+before the branch closes.
 
 ## Supported platform contract
 
@@ -79,7 +79,7 @@ version or Debian revision; an existing tag is never moved.
 
 ## Database and rollback contract
 
-Version `0.1.0` supports database schema generation 4. The daemon intentionally
+Version `0.1.1` supports database schema generation 4. The daemon intentionally
 refuses to open a database whose schema is newer than it supports.
 
 Binary package downgrade is supported only while the old and new packages use the
@@ -96,11 +96,11 @@ below `/run` may be removed safely.
 
 The final release sequence is:
 
-1. Merge `release/0.1.0` into `master` with an explicit merge commit.
-2. Create signed annotated tag `v0.1.0` on that merge commit.
+1. Merge `hotfix/0.1.1` into `master` with an explicit merge commit.
+2. Create signed annotated tag `v0.1.1` on that merge commit.
 3. Build the immutable release from that tag.
-4. Merge `release/0.1.0` back into `develop` with an explicit merge commit.
-5. Delete the release branch only after both merges succeed.
+4. Merge `hotfix/0.1.1` into `develop` with an explicit merge commit.
+5. Delete the hotfix branch only after both merges succeed.
 
 The tag signing identity is Lp04-Bruno
 <88251364+lp04-Bruno@users.noreply.github.com>. A signing key must be configured
@@ -123,8 +123,8 @@ The standard local release verification is:
 ```bash
 scripts/build-release-container.sh
 scripts/verify-reproducible-build.sh
-scripts/test-package-lifecycle.sh artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
-scripts/test-btf-failures.sh artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+scripts/test-package-lifecycle.sh artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
+scripts/test-btf-failures.sh artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
 ```
 
 The release-candidate variant derives the exact prerelease version from
@@ -165,17 +165,17 @@ Two host-authorized checks intentionally remain outside rootless containers beca
 they require a real systemd instance or the host kernel's eBPF verifier:
 
 ```bash
-sudo scripts/test-package-systemd.sh artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
-sudo scripts/test-packaged-capture.exp artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+sudo scripts/test-package-systemd.sh artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
+sudo scripts/test-packaged-capture.exp artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
 ```
 
-For RC2 the single wrapper below runs both checks plus the full packaged
+For the 0.1.1 RC1 the single wrapper below runs both checks plus the full packaged
 helper-to-daemon terminal integration and backpressure test against the exact
 candidate package:
 
 ```bash
 sudo scripts/test-release-candidate-host.sh \
-  artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.deb
+  artifacts/release-candidate/build-a/ctf-hunter_0.1.1~rc1-1_amd64.deb
 ```
 
 ## Artifact verification and signing

@@ -18,14 +18,17 @@ scripts/verify-systemd-units.sh
 
 ## Workflow boundaries
 
-`ci.yml` runs for pull requests and pushes to `develop`, `master`, and release
-branches. It has read-only repository access, receives no secrets, creates the
-pinned Debian 12 builder, and runs Rust formatting, tests, Clippy, Svelte checks,
-frontend tests, the frontend production build, native release compilation,
-systemd syntax checks, service-policy checks, and release metadata checks.
+`ci.yml` runs for pull requests and pushes to `develop` and `master`. Its fast
+policy job always validates release metadata, service policy, systemd units,
+workflow pins, and the CI-policy unit tests. Pull requests limited to reviewed
+workflow, Renovate, policy-test, and documentation paths stop there. Source,
+dependency, build, packaging, and unknown changes fail closed into the complete
+Debian 12 native gate. Pushes to protected branches always run the complete gate.
+Both jobs have read-only repository access and receive no secrets.
 
-`package.yml` runs on release branches and by manual request. It also has only
-read access and no secrets. It produces two clean Debian 12 builds, compares the
+`package.yml` runs only by manual request, avoiding a duplicate of the full
+release-candidate package build on every release or hotfix push. It has only read
+access and no secrets. It produces two clean Debian 12 builds, compares the
 main and debug packages byte for byte, runs Debian and Kali lifecycle tests,
 checks BTF failure behavior, generates unsigned internal checksum/SBOM evidence,
 and uploads a short-lived internal artifact. The extended `reprotest` matrix is
@@ -34,16 +37,15 @@ tree outside the checkout, excludes all generated build state, uses a disk-backe
 temporary root, pins both perturbed builds to the already-prepared release-builder
 store, and installs `disorderfs` for the file-ordering perturbation.
 
-`release-candidate.yml` runs only when `release/0.1.0` is pushed. A push trigger
-is required because GitHub accepts `workflow_dispatch` only after the workflow
-exists on the default branch. The workflow repeats the complete source gates,
+`release-candidate.yml` runs only when `hotfix/0.1.1` is pushed. The workflow
+repeats the complete source gates,
 reclaims only their generated Cargo and frontend workspace artifacts, builds
-`0.1.0~rc2-1` twice, validates the Debian/Kali lifecycle and BTF
+`0.1.1~rc1-1` twice, validates the Debian/Kali lifecycle and BTF
 diagnostics, and uploads the exact unsigned RC evidence. Public repositories
 also receive GitHub provenance and SBOM attestations. A separate job behind the
 `release-candidate` environment may stage those already-validated bytes as the
 immutable draft prerelease
-`v0.1.0-rc2`; it never publishes the draft or replaces a different existing
+`v0.1.1-rc1`; it never publishes the draft or replaces a different existing
 asset. The RC tag is also required to resolve directly to the commit that
 produced the validated bytes. The staging job creates or verifies that lightweight
 RC reference before creating the draft with `--verify-tag`; it does not depend
@@ -85,8 +87,10 @@ Protect `.github/workflows/`, `renovate.json`, `release/`, Debian packaging, and
 publication scripts through the checked-in `CODEOWNERS` rules and branch
 protection on `master` and `develop`. Renovate checks the pinned GitHub Actions
 monthly and opens pull requests only against `develop`; a proposed SHA change
-must also update and pass the reviewed allowlist in
-`scripts/verify-workflows.py`. Renovate never automerges these changes.
+must remain on the reviewed action allowlist, use a full commit SHA, remain
+consistent across workflows, and pass `scripts/verify-workflows.py`. The verifier
+deliberately does not duplicate the old SHA, so a legitimate Renovate update can
+validate itself. Renovate never automerges these changes.
 
 The repository configuration is intentionally limited to the `github-actions`
 manager, retains full commit-SHA pins and their version comments, waits seven
@@ -114,7 +118,7 @@ public key to the documented trust path before using it, never by replacing an
 existing tag or release asset.
 
 Create a separate environment named `release-candidate`. Restrict it to the
-`release/0.1.0` branch and disable administrator bypass where the repository plan
+`hotfix/0.1.1` branch and disable administrator bypass where the repository plan
 supports that control. Add a required reviewer when another trusted maintainer is
 available; a sole-maintainer repository must not enable a self-review policy that
 makes the environment impossible to approve. This environment needs no secrets.
@@ -158,20 +162,24 @@ state simultaneously. Testing and stable use separate signed distributions, but
 both reference the same immutable snapshot name derived from the release tag and
 the full package SHA-256.
 
-## First-release operation
+## Hotfix 0.1.1 operation
 
-1. Require successful `CI` and `Package validation` checks on the release branch.
-2. Run the package workflow manually once with `run_reprotest` enabled.
-3. Configure the `release-candidate` environment, push `release/0.1.0`, approve
-   the protected staging job, and inspect the resulting RC2 draft. The immutable
-   RC1 remains available as evidence for the earlier candidate commit.
+1. Require a successful `CI` check on the hotfix branch. Source changes still
+   execute the complete native gate; workflow- or documentation-only pull
+   requests use the policy-only fast path.
+2. Run `Package validation` manually once with `run_reprotest` enabled. It is
+   deliberately not an automatic required pull-request check because the
+   release-candidate workflow repeats the complete isolated package build.
+3. Configure the `release-candidate` environment for `hotfix/0.1.1`, push the
+   branch, approve the protected staging job, and inspect the resulting RC1 draft.
 4. Complete the host-authorized systemd and live-capture tests from the release
    policy.
-5. Merge the release branch into `master` with an explicit merge commit.
+5. Merge the hotfix branch into `master` with an explicit merge commit.
 6. Create the signed annotated tag only on that commit and push it once.
 7. Review and approve `release-signing`; inspect the resulting draft and its
    checksum signature, SBOM, and provenance.
 8. Publish the GitHub draft only after the Phase 10G/10H acceptance gates.
-9. Leave APT disabled until Phase 10I provisions the external publisher. Then
+9. Merge the hotfix branch back into `develop`, then delete it after both merges.
+10. Leave APT disabled until Phase 10I provisions the external publisher. Then
    dispatch `Publish APT snapshot` with the immutable tag and package SHA-256,
    validate `testing`, and approve `stable` without rebuilding.

@@ -8,7 +8,7 @@ source_root=$work_dir/source
 temp_dir=$work_dir/tmp
 podman_root=$project_root/artifacts/.podman-root
 podman_runroot=/tmp/ctf-hunter-podman-run
-build_image=localhost/ctf-hunter-build:0.1.0-bookworm
+build_image=localhost/ctf-hunter-build:0.1.1-bookworm
 
 for directory in "$store_dir" "$work_dir"; do
     case "$directory" in
@@ -47,7 +47,7 @@ CTF_HUNTER_PODMAN_ROOT=$podman_root \
 CTF_HUNTER_PODMAN_RUNROOT=$podman_runroot \
     "$project_root/scripts/podman-release.sh" image exists "$build_image"
 printf -v build_command \
-    'SOURCE_DATE_EPOCH=%q CTF_HUNTER_PODMAN_ROOT=%q CTF_HUNTER_PODMAN_RUNROOT=%q CTF_HUNTER_PODMAN_DRIVER=overlay CTF_HUNTER_BUILD_IMAGE=%q ARTIFACT_SUBDIRECTORY=reprotest/output scripts/build-bookworm-package.sh && cp artifacts/reprotest/output/ctf-hunter_0.1.0-1_amd64.deb ctf-hunter-reprotest.deb' \
+    'SOURCE_DATE_EPOCH=%q CTF_HUNTER_PODMAN_ROOT=%q CTF_HUNTER_PODMAN_RUNROOT=%q CTF_HUNTER_PODMAN_DRIVER=overlay CTF_HUNTER_BUILD_IMAGE=%q ARTIFACT_SUBDIRECTORY=reprotest/output scripts/build-bookworm-package.sh && cp artifacts/reprotest/output/ctf-hunter_0.1.1-1_amd64.deb ctf-hunter-reprotest.deb' \
     "$source_date_epoch" "$podman_root" "$podman_runroot" "$build_image"
 export TMPDIR=$temp_dir
 

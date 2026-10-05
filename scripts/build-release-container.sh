@@ -3,7 +3,7 @@ set -eu
 
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$project_root/release/build-environment.env"
-: "${CTF_HUNTER_BUILD_IMAGE:=localhost/ctf-hunter-build:0.1.0-bookworm}"
+: "${CTF_HUNTER_BUILD_IMAGE:=localhost/ctf-hunter-build:0.1.1-bookworm}"
 
 exec "$project_root/scripts/podman-release.sh" build \
     --pull=never \
