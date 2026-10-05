@@ -18,6 +18,9 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "ctf-hunter-ui"
 path = "src/main.rs"
 
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2.7.0", features = [] }
 

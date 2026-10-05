@@ -6,7 +6,7 @@ on:
       release_tag:
         description: Immutable GitHub Release tag to promote
         required: true
-        default: v0.1.0
+        default: v0.1.1
         type: string
       package_sha256:
         description: Expected SHA-256 of the main Debian package
@@ -88,7 +88,7 @@ jobs:
           test "$actual" = "${RELEASE_GPG_FINGERPRINT// /}"
           gpg --batch --verify release-artifacts/SHA256SUMS.asc release-artifacts/SHA256SUMS
           (cd release-artifacts && sha256sum --check SHA256SUMS)
-          package=release-artifacts/ctf-hunter_0.1.0-1_amd64.deb
+          package=release-artifacts/ctf-hunter_0.1.1-1_amd64.deb
           test "$(sha256sum "$package" | cut -d' ' -f1)" = "$EXPECTED_SHA"
           gh attestation verify "$package" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml" \
@@ -106,7 +106,7 @@ jobs:
           EXPECTED_SHA: ${{ inputs.package_sha256 }}
         run: |
           scripts/publish-apt-snapshot.sh testing \
-            release-artifacts/ctf-hunter_0.1.0-1_amd64.deb \
+            release-artifacts/ctf-hunter_0.1.1-1_amd64.deb \
             "$RELEASE_TAG" "$EXPECTED_SHA"
 
       - name: Install through testing source
@@ -121,7 +121,7 @@ jobs:
           test -s "$archive_key"
           scripts/test-apt-repository.sh \
             "$APT_REPOSITORY_URL" testing "$archive_key" \
-            0.1.0-1 "$EXPECTED_SHA"
+            0.1.1-1 "$EXPECTED_SHA"
 
   publish-stable:
     name: Approve and promote exact snapshot
@@ -163,7 +163,7 @@ jobs:
           test "$actual" = "${RELEASE_GPG_FINGERPRINT// /}"
           gpg --batch --verify release-artifacts/SHA256SUMS.asc release-artifacts/SHA256SUMS
           (cd release-artifacts && sha256sum --check SHA256SUMS)
-          package=release-artifacts/ctf-hunter_0.1.0-1_amd64.deb
+          package=release-artifacts/ctf-hunter_0.1.1-1_amd64.deb
           test "$(sha256sum "$package" | cut -d' ' -f1)" = "$EXPECTED_SHA"
           gh attestation verify "$package" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml" \
@@ -181,7 +181,7 @@ jobs:
           EXPECTED_SHA: ${{ inputs.package_sha256 }}
         run: |
           scripts/publish-apt-snapshot.sh stable \
-            release-artifacts/ctf-hunter_0.1.0-1_amd64.deb \
+            release-artifacts/ctf-hunter_0.1.1-1_amd64.deb \
             "$RELEASE_TAG" "$EXPECTED_SHA"
 
       - name: Install through stable source
@@ -196,4 +196,4 @@ jobs:
           test -s "$archive_key"
           scripts/test-apt-repository.sh \
             "$APT_REPOSITORY_URL" stable "$archive_key" \
-            0.1.0-1 "$EXPECTED_SHA"
+            0.1.1-1 "$EXPECTED_SHA"

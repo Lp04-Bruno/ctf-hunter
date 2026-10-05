@@ -3,7 +3,7 @@ name: Release candidate
 on:
   push:
     branches:
-      - release/0.1.0
+      - hotfix/0.1.1
 
 permissions: {}
 
@@ -13,8 +13,8 @@ concurrency:
 
 jobs:
   build:
-    name: Build and validate RC2
-    if: github.ref == 'refs/heads/release/0.1.0'
+    name: Build and validate RC1
+    if: github.ref == 'refs/heads/hotfix/0.1.1'
     runs-on: ubuntu-24.04
     timeout-minutes: 210
     permissions:
@@ -47,13 +47,13 @@ jobs:
             --security-opt label=disable \
             --volume "$PWD:/workspace:rw" \
             --workdir /workspace \
-            "localhost/ctf-hunter-build:0.1.0-bookworm" \
+            "localhost/ctf-hunter-build:0.1.1-bookworm" \
             scripts/run-ci-gates.sh
 
       - name: Reclaim source-gate build space
         run: scripts/reclaim-release-space.sh
 
-      - name: Build reproducible RC2 packages
+      - name: Build reproducible RC1 packages
         run: scripts/build-release-candidate.sh
 
       - name: Validate package lifecycle and BTF diagnostics
@@ -64,26 +64,26 @@ jobs:
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: |
-            artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.deb
-            artifacts/release-candidate/build-a/ctf-hunter-dbgsym_0.1.0~rc2-1_amd64.deb
+            artifacts/release-candidate/build-a/ctf-hunter_0.1.1~rc1-1_amd64.deb
+            artifacts/release-candidate/build-a/ctf-hunter-dbgsym_0.1.1~rc1-1_amd64.deb
 
       - name: Attest candidate SBOM
         if: github.event.repository.visibility == 'public'
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
-          subject-path: artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.deb
-          sbom-path: artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.spdx.json
+          subject-path: artifacts/release-candidate/build-a/ctf-hunter_0.1.1~rc1-1_amd64.deb
+          sbom-path: artifacts/release-candidate/build-a/ctf-hunter_0.1.1~rc1-1_amd64.spdx.json
 
       - name: Upload exact candidate evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-candidate-${{ github.sha }}
           path: |
-            artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.deb
-            artifacts/release-candidate/build-a/ctf-hunter-dbgsym_0.1.0~rc2-1_amd64.deb
-            artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.buildinfo
-            artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.changes
-            artifacts/release-candidate/build-a/ctf-hunter_0.1.0~rc2-1_amd64.spdx.json
+            artifacts/release-candidate/build-a/ctf-hunter_0.1.1~rc1-1_amd64.deb
+            artifacts/release-candidate/build-a/ctf-hunter-dbgsym_0.1.1~rc1-1_amd64.deb
+            artifacts/release-candidate/build-a/ctf-hunter_0.1.1~rc1-1_amd64.buildinfo
+            artifacts/release-candidate/build-a/ctf-hunter_0.1.1~rc1-1_amd64.changes
+            artifacts/release-candidate/build-a/ctf-hunter_0.1.1~rc1-1_amd64.spdx.json
             artifacts/release-candidate/build-a/SHA256SUMS
           if-no-files-found: error
           compression-level: 0
@@ -121,8 +121,8 @@ jobs:
           (cd release-artifacts && sha256sum --check SHA256SUMS)
           python3 scripts/verify-release-artifacts.py release-artifacts
           python3 scripts/verify-debian-package.py \
-            --expected-version '0.1.0~rc2-1' \
-            release-artifacts/ctf-hunter_0.1.0~rc2-1_amd64.deb
+            --expected-version '0.1.1~rc1-1' \
+            release-artifacts/ctf-hunter_0.1.1~rc1-1_amd64.deb
 
       - name: Verify public candidate attestations
         if: github.event.repository.visibility == 'public'
@@ -137,11 +137,11 @@ jobs:
               --source-ref "$GITHUB_REF"
           done
 
-      - name: Create or verify the immutable RC2 draft
+      - name: Create or verify the immutable RC1 draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag=v0.1.0-rc2
+          tag=v0.1.1-rc1
           tag_api="repos/$GITHUB_REPOSITORY/git/ref/tags/$tag"
           if ! tag_target=$(gh api "$tag_api" \
             --jq '.object.type + " " + .object.sha' 2>/dev/null); then
@@ -171,8 +171,8 @@ jobs:
               --target "$GITHUB_SHA" \
               --verify-tag \
               --draft --prerelease \
-              --title "CTF Hunter 0.1.0 RC2" \
-              --notes-file docs/releases/0.1.0-rc2.md
+              --title "CTF Hunter 0.1.1 RC1" \
+              --notes-file docs/releases/0.1.1-rc1.md
           fi
           test "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
             --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"

@@ -67,7 +67,7 @@ jobs:
             --security-opt label=disable \
             --volume "$PWD:/workspace:rw" \
             --workdir /workspace \
-            "localhost/ctf-hunter-build:0.1.0-bookworm" \
+            "localhost/ctf-hunter-build:0.1.1-bookworm" \
             scripts/run-ci-gates.sh
 
       - name: Reclaim source-gate build space
@@ -78,7 +78,7 @@ jobs:
 
       - name: Repeat package lifecycle gates
         run: |
-          package=artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+          package=artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
           scripts/test-package-lifecycle.sh "$package"
           scripts/test-btf-failures.sh "$package"
 
@@ -91,25 +91,25 @@ jobs:
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: |
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
-            artifacts/reproducible/build-a/ctf-hunter-dbgsym_0.1.0-1_amd64.deb
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
+            artifacts/reproducible/build-a/ctf-hunter-dbgsym_0.1.1-1_amd64.deb
 
       - name: Attest package SBOM
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
-          subject-path: artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
-          sbom-path: artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.spdx.json
+          subject-path: artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
+          sbom-path: artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.spdx.json
 
       - name: Transfer exact unsigned release set
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-unsigned-${{ github.run_id }}
           path: |
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
-            artifacts/reproducible/build-a/ctf-hunter-dbgsym_0.1.0-1_amd64.deb
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.buildinfo
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.changes
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.spdx.json
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
+            artifacts/reproducible/build-a/ctf-hunter-dbgsym_0.1.1-1_amd64.deb
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.buildinfo
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.changes
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.spdx.json
             artifacts/reproducible/build-a/SHA256SUMS
           if-no-files-found: error
           compression-level: 0

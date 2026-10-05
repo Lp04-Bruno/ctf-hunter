@@ -27,6 +27,11 @@
     <binary>ctf-hunter</binary>
   </provides>
   <releases>
+    <release version="0.1.1" date="2026-10-04">
+      <description>
+        <p>Fix packaged application startup and improve release automation.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-09-29"/>
   </releases>
   <content_rating type="oars-1.1"/>

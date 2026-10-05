@@ -1,9 +1,6 @@
 name: Package validation
 
 on:
-  push:
-    branches:
-      - release/**
   workflow_dispatch:
     inputs:
       run_reprotest:
@@ -50,12 +47,12 @@ jobs:
       - name: Validate install, upgrade, remove, and purge
         run: >-
           scripts/test-package-lifecycle.sh
-          artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+          artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
 
       - name: Validate missing and malformed BTF handling
         run: >-
           scripts/test-btf-failures.sh
-          artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
+          artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
 
       - name: Build unsigned internal evidence
         run: >-
@@ -71,11 +68,11 @@ jobs:
         with:
           name: ctf-hunter-${{ github.sha }}-amd64
           path: |
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.deb
-            artifacts/reproducible/build-a/ctf-hunter-dbgsym_0.1.0-1_amd64.deb
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.buildinfo
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.changes
-            artifacts/reproducible/build-a/ctf-hunter_0.1.0-1_amd64.spdx.json
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.deb
+            artifacts/reproducible/build-a/ctf-hunter-dbgsym_0.1.1-1_amd64.deb
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.buildinfo
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.changes
+            artifacts/reproducible/build-a/ctf-hunter_0.1.1-1_amd64.spdx.json
             artifacts/reproducible/build-a/SHA256SUMS
           if-no-files-found: error
           compression-level: 0

@@ -270,6 +270,8 @@ case "$package_version" in
     0.1.0~rc1-1) previous_version=0.1.0~rc0-1 ;;
     0.1.0~rc2-1) previous_version=0.1.0~rc1-1 ;;
     0.1.0-1) previous_version=0.1.0~rc2-1 ;;
+    0.1.1~rc1-1) previous_version=0.1.0-1 ;;
+    0.1.1-1) previous_version=0.1.1~rc1-1 ;;
     *) fail "unsupported package version in lifecycle test: $package_version" ;;
 esac
 sed -i "s/^Version: .*/Version: $previous_version/" "$fixture_dir/root/DEBIAN/control"

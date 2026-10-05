@@ -79,4 +79,4 @@ RUN curl --proto '=https' --tlsv1.2 -fL \
 
 LABEL org.opencontainers.image.source="https://github.com/Lp04-Bruno/ctf-hunter" \
       org.opencontainers.image.title="CTF Hunter Debian 12 release builder" \
-      org.opencontainers.image.version="0.1.0"
+      org.opencontainers.image.version="0.1.1"
